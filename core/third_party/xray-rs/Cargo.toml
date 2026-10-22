@@ -36,7 +36,7 @@ rcgen = "0.13"
 clap = { version = "4.5", features = ["derive"] }
 rand = "0.8"
 httparse = "1.9"
-socket2 = "0.5"
+socket2 = { version = "0.5", features = ["all"] }
 sha2 = "0.10"
 hex = "0.4"
 aes-gcm = "0.10"
