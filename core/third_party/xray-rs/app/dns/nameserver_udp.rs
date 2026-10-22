@@ -43,7 +43,7 @@ impl NameServer for UdpNameServer {
 
     async fn query_ip(&self, domain: &str) -> Result<Vec<IpAddr>> {
         let clean = domain.trim_end_matches('.');
-        let _bind_addr = if self.server_addr.is_ipv6() {
+        let bind_addr = if self.server_addr.is_ipv6() {
             "[::]:0"
         } else {
             "0.0.0.0:0"
