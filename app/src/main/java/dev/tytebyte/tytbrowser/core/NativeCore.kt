@@ -11,6 +11,10 @@ object NativeCore {
     @JvmStatic external fun blockerAddRules(category: Int, text: String): Int
     @JvmStatic external fun blockerCheck(url: String, pageUrl: String): Int
     @JvmStatic external fun extractReadable(html: String, baseUrl: String): String
+    @JvmStatic external fun xrayStart(link: String, port: Int): String
+    @JvmStatic external fun xrayStop()
+    @JvmStatic external fun xrayPort(): Int
+    @JvmStatic external fun proxyParse(text: String): String
     @JvmStatic external fun suggest(query: String, entries: String, limit: Int, now: Long): String
 }
 
@@ -74,6 +78,29 @@ object Core {
         return Resolved(InputKind.SEARCH, base + q, s)
     }
 
+    /** Запуск встроенного прокси. Возвращает null при успехе или текст ошибки. */
+    fun proxyStart(link: String, port: Int): String? {
+        if (!loaded) return "нативное ядро не загружено"
+        val r = safe("внутренняя ошибка") { NativeCore.xrayStart(link, port) }
+        return r.ifEmpty { null }
+    }
+
+    fun proxyStop() { if (loaded) safe(Unit) { NativeCore.xrayStop() } }
+
+    fun proxyPort(): Int = if (loaded) safe(0) { NativeCore.xrayPort() } else 0
+
+    /** Разбор текста со ссылками vless/vmess/trojan/ss: список (имя, протокол, адрес, ссылка). */
+    fun proxyParse(text: String): List<ProxyProfile> {
+        if (!loaded) return emptyList()
+        return try {
+            val a = org.json.JSONArray(safe("[]") { NativeCore.proxyParse(text) })
+            (0 until a.length()).map {
+                val o = a.getJSONObject(it)
+                ProxyProfile(o.getString("name"), o.getString("protocol"), "${o.getString("host")}:${o.getInt("port")}", o.getString("link"))
+            }
+        } catch (_: Exception) { emptyList() }
+    }
+
     fun cleanUrl(url: String): String = if (loaded) safe(url) { NativeCore.cleanUrl(url) } else url
 
     fun configureBlocker(ads: Boolean, trackers: Boolean): Int =
@@ -119,3 +146,5 @@ object Core {
         default
     }
 }
+
+data class ProxyProfile(val name: String, val protocol: String, val address: String, val link: String)

@@ -10,8 +10,15 @@ publish = false
 name = "tytcore"
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = ["xray"]
+# Встроенный прокси (xray-rs). Без него ядро собирается без сетевых зависимостей.
+xray = ["dep:xray-rs", "dep:tokio"]
+
 [dependencies]
 jni = "0.21"
+xray-rs = { path = "third_party/xray-rs", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time"], optional = true }
 
 [profile.release]
 opt-level = "z"

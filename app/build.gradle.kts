@@ -71,3 +71,8 @@ val cargoNdk = tasks.register<Exec>("cargoNdk") {
 if (!project.hasProperty("skipRust")) {
     tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(cargoNdk) }
 }
+
+dependencies {
+    // ProxyController: направляет трафик WebView во встроенный прокси (Xray).
+    implementation("androidx.webkit:webkit:1.11.0")
+}

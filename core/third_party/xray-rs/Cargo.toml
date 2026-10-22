@@ -1,0 +1,77 @@
+[package]
+name = "xray-rs"
+version = "1.0.3"
+edition = "2024"
+authors = ["abc15018045126", "Xray Rust Team"]
+description = "High-performance Rust implementation of Xray-core with XTLS Vision, Reality, and TUN support."
+repository = "https://github.com/abc15018045126/xray-rs"
+homepage = "https://github.com/abc15018045126/xray-rs"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+keywords = ["xray", "vless", "vision", "reality", "tun"]
+categories = ["network-programming", "cryptography"]
+
+[lib]
+name = "xray_core"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { version = "1.40", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec", "io"] }
+bytes = "1.7"
+futures = "0.3"
+async-trait = "0.1"
+thiserror = "1.0"
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { version = "1.10", features = ["v4", "v5", "serde"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+webpki-roots = "0.26"
+rustls-pki-types = "1.8"
+rcgen = "0.13"
+clap = { version = "4.5", features = ["derive"] }
+rand = "0.8"
+httparse = "1.9"
+socket2 = "0.5"
+sha2 = "0.10"
+hex = "0.4"
+aes-gcm = "0.10"
+chacha20poly1305 = "0.10"
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+hkdf = "0.12"
+tokio-tungstenite = "0.24"
+lazy_static = "1.5"
+md-5 = "0.10"
+regex = "1.10"
+sha-1 = "0.10"
+base64 = "0.22"
+tun = { version = "0.8.14", features = ["async"] }
+tun-rs = { version = "2", features = ["async", "async_framed"] }
+network-interface = "2"
+ipnet = "2"
+ipstack = "1.0.1"
+
+[target.'cfg(windows)'.dependencies]
+wintun = { package = "wintun-rs", version = "0.0.6" }
+windows = { version = "0.62", features = [
+    "Win32_Networking_WinSock",
+    "Win32_Foundation",
+    "Win32_NetworkManagement_Rras",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Security_Authorization",
+    "Win32_System_Threading",
+    "Win32_System_ProcessStatus"
+] }
+
+[lints.rust]
+warnings = "warn"
+
+[lints.clippy]
+all = "warn"
+module_inception = "allow"
+type_complexity = "allow"

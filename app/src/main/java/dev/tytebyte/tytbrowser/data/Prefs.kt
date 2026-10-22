@@ -88,8 +88,22 @@ class Prefs(ctx: Context) {
         get() = sp.getLong("blocked_total", 0)
         set(v) = sp.edit().putLong("blocked_total", v).apply()
 
+    /** Встроенный прокси: включён ли, ссылка выбранного профиля и все сохранённые ссылки (по одной на строку). */
+    var proxyEnabled: Boolean
+        get() = sp.getBoolean("proxy_on", false)
+        set(v) = sp.edit().putBoolean("proxy_on", v).apply()
+
+    var proxyActiveLink: String
+        get() = sp.getString("proxy_active", "") ?: ""
+        set(v) = sp.edit().putString("proxy_active", v).apply()
+
+    var proxyLinks: String
+        get() = sp.getString("proxy_links", "") ?: ""
+        set(v) = sp.edit().putString("proxy_links", v).apply()
+
     fun reset() {
         val keep = sp.getString("tabs", "")
-        sp.edit().clear().putString("tabs", keep).apply()
+        val links = proxyLinks
+        sp.edit().clear().putString("tabs", keep).putString("proxy_links", links).apply()
     }
 }

@@ -309,6 +309,7 @@ class SettingsPanel(
     private val onChanged: () -> Unit,
     private val onClearData: () -> Unit,
     private val onSetDefault: () -> Unit,
+    private val onProxy: () -> Unit,
     close: () -> Unit,
 ) : Panel(ctx, pal, "Настройки", close) {
 
@@ -393,6 +394,9 @@ class SettingsPanel(
         toggle("JavaScript", "Отключение ускоряет текстовые страницы, но ломает многие сайты", { prefs.javaScript }, { prefs.javaScript = it })
         toggle("Версия для ПК", null, { prefs.desktopMode }, { prefs.desktopMode = it })
 
+        section("Сеть")
+        choice("Прокси (VLESS, VMess, Trojan, SS)", if (prefs.proxyEnabled) "Включён" else "Выключен") { onProxy() }
+
         section("Режим чтения")
         choice("Шрифт", if (prefs.readerSerif) "С засечками" else "Без засечек") { prefs.readerSerif = !prefs.readerSerif; render() }
 
@@ -413,5 +417,117 @@ class SettingsPanel(
         choice("Tyt Browser", "v${BuildConfig.VERSION_NAME}") {}
         choice("Ядро", if (Core.loaded) "Rust ${Core.version()}" else "Kotlin (нативная библиотека не загружена)") {}
         choice("Движок страниц", "Android System WebView") {}
+    }
+}
+
+/** Профили встроенного прокси: импорт ссылок из буфера, выбор и переключатель. */
+class ProxyPanel(
+    ctx: Context, pal: Pal, private val prefs: Prefs,
+    private val onApply: () -> Unit,
+    close: () -> Unit,
+) : Panel(ctx, pal, "Прокси", close) {
+
+    private val col = LinearLayout(ctx).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(0, 0, 0, ctx.dp(24))
+    }
+
+    init {
+        body.addView(scroll(col), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        render()
+    }
+
+    private fun links(): List<String> = prefs.proxyLinks.split('\n').filter { it.isNotBlank() }
+
+    private fun render() {
+        col.removeAllViews()
+        val profiles = Core.proxyParse(links().joinToString("\n"))
+        val active = prefs.proxyActiveLink
+
+        val sw = android.widget.Switch(ctx).apply { isChecked = prefs.proxyEnabled }
+        val row = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(ctx.dp(16), ctx.dp(14), ctx.dp(16), ctx.dp(14))
+        }
+        val txt = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; layoutParams = weighted().apply { marginEnd = ctx.dp(12) } }
+        txt.addView(ctx.text("Прокси для браузера", 15f, pal.text))
+        txt.addView(ctx.text(
+            if (!Core.loaded) "Нативное ядро не загружено"
+            else if (prefs.proxyEnabled && dev.tytebyte.tytbrowser.ProxyManager.isRunning()) "Работает на 127.0.0.1:${dev.tytebyte.tytbrowser.ProxyManager.PORT}"
+            else "Только трафик страниц; загрузки файлов идут напрямую",
+            11f, pal.muted
+        ).apply { setPadding(0, ctx.dp(3), 0, 0) })
+        row.addView(txt); row.addView(sw)
+        sw.setOnCheckedChangeListener { _, v ->
+            if (v && prefs.proxyActiveLink.isEmpty()) {
+                sw.isChecked = false
+                Toast.makeText(ctx, "Сначала добавьте и выберите профиль", Toast.LENGTH_SHORT).show()
+            } else {
+                prefs.proxyEnabled = v
+                onApply()
+                render()
+            }
+        }
+        col.addView(row)
+
+        col.addView(ctx.text("ПРОФИЛИ", 11f, pal.accent, true).apply { setPadding(ctx.dp(16), ctx.dp(16), ctx.dp(16), ctx.dp(6)) })
+        if (profiles.isEmpty()) {
+            col.addView(ctx.text("Пока пусто. Скопируйте ссылку vless://, vmess://, trojan:// или ss:// и нажмите «Вставить из буфера».", 13f, pal.muted).apply {
+                setPadding(ctx.dp(16), ctx.dp(6), ctx.dp(16), ctx.dp(10))
+            })
+        }
+        profiles.forEach { p ->
+            val on = p.link == active
+            col.addView(LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(ctx.dp(16), ctx.dp(12), ctx.dp(16), ctx.dp(12))
+                background = ripple(pal.ripple, null)
+                val t = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; layoutParams = weighted() }
+                t.addView(ctx.text(p.name, 15f, if (on) pal.accent else pal.text).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
+                t.addView(ctx.text("${p.protocol.uppercase()} · ${p.address}", 11f, pal.muted).apply { setPadding(0, ctx.dp(3), 0, 0) })
+                addView(t)
+                if (on) addView(ctx.text("✓", 18f, pal.accent))
+                setOnClickListener {
+                    prefs.proxyActiveLink = p.link
+                    if (prefs.proxyEnabled) onApply()
+                    render()
+                }
+                setOnLongClickListener {
+                    AlertDialog.Builder(ctx).setTitle(p.name)
+                        .setItems(arrayOf("Удалить")) { _, _ ->
+                            prefs.proxyLinks = links().filter { it != p.link }.joinToString("\n")
+                            if (on) { prefs.proxyActiveLink = ""; prefs.proxyEnabled = false; onApply() }
+                            render()
+                        }.show()
+                    true
+                }
+            })
+        }
+        col.addView(ctx.text("+ Вставить из буфера", 14f, pal.accent, true).apply {
+            setPadding(ctx.dp(16), ctx.dp(16), ctx.dp(16), ctx.dp(8))
+            setOnClickListener { importClipboard() }
+        })
+        col.addView(ctx.text("Поддерживаются транспорты tcp и ws, защита TLS и REALITY. Остальные ссылки будут пропущены.", 11f, pal.muted).apply {
+            setPadding(ctx.dp(16), ctx.dp(8), ctx.dp(16), 0)
+        })
+    }
+
+    private fun importClipboard() {
+        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        val text = cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(ctx)?.toString().orEmpty()
+        val found = Core.proxyParse(text)
+        if (found.isEmpty()) {
+            Toast.makeText(ctx, "В буфере нет поддерживаемых ссылок", Toast.LENGTH_LONG).show()
+            return
+        }
+        val have = links().toMutableList()
+        var added = 0
+        found.forEach { if (it.link !in have) { have.add(it.link); added++ } }
+        prefs.proxyLinks = have.joinToString("\n")
+        if (prefs.proxyActiveLink.isEmpty()) prefs.proxyActiveLink = found.first().link
+        Toast.makeText(ctx, "Добавлено профилей: $added", Toast.LENGTH_SHORT).show()
+        render()
     }
 }
