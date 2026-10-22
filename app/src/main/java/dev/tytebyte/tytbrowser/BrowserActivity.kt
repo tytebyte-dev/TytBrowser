@@ -798,7 +798,8 @@ class BrowserActivity : Activity() {
                 toast("Не удалось начать загрузку")
             }
         }
-        if (Build.VERSION.SDK_INT < 29 && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+        // До Android 6 разрешения выдаются при установке, с Android 10 запись в «Загрузки» не требует разрешения.
+        if (Build.VERSION.SDK_INT in 23..28 && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
             pendingDownload = doIt
             requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), REQ_STORAGE)
         } else doIt()

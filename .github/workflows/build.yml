@@ -6,12 +6,32 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Версии «слоёв». Смена любой версии = новый ключ кэша = чистая установка этого слоя.
+  CARGO_NDK_VERSION: "4.1.2"
+  NDK_VERSION: "26.3.11579264"
+  ANDROID_API: "34"
+  BUILD_TOOLS: "34.0.0"
+  GRADLE_VERSION: "8.9"
+  # Если нужно принудительно сбросить все слои — поменяйте это число.
+  CACHE_SALT: "v1"
+  # Путь SDK на образах GitHub (нужен в контексте env для ключей кэша).
+  ANDROID_HOME: /usr/local/lib/android/sdk
+  TOOLS_DIR: /home/runner/.tyt-tools
+
 jobs:
   core-tests:
     name: Rust core tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -20,12 +40,12 @@ jobs:
 
   apk:
     name: Android APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: core-tests
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
@@ -33,26 +53,114 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk --locked
+          key: android
 
-      - uses: android-actions/setup-android@v3
-      - name: Install NDK
-        run: sdkmanager "ndk;26.3.11579264" "platforms;android-34" "build-tools;34.0.0"
-      - name: Export NDK path
-        run: echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.3.11579264" >> "$GITHUB_ENV"
-
-      - uses: gradle/actions/setup-gradle@v4
+      # ───────────── Слой 1: cargo-ndk ─────────────
+      # restore → проверка → (если слоя нет или он битый) установка с нуля → сохранение
+      - name: "Layer cargo-ndk: restore"
+        id: ndk-tool-cache
+        uses: actions/cache/restore@v5
         with:
-          gradle-version: "8.9"
+          path: ${{ env.TOOLS_DIR }}/cargo-ndk
+          key: cargo-ndk-${{ runner.os }}-${{ env.CARGO_NDK_VERSION }}-${{ env.CACHE_SALT }}
+
+      - name: "Layer cargo-ndk: verify or install"
+        id: ndk-tool
+        run: |
+          export PATH="$TOOLS_DIR/cargo-ndk/bin:$PATH"
+          state=""
+          if cargo ndk --version 2>/dev/null | grep -qF "$CARGO_NDK_VERSION"; then
+            state="restored from cache, verified"
+          else
+            if [ "${{ steps.ndk-tool-cache.outputs.cache-hit }}" = "true" ]; then
+              echo "::warning::cargo-ndk cache was restored but is broken — reinstalling from scratch"
+            fi
+            rm -rf "$TOOLS_DIR/cargo-ndk"
+            cargo install cargo-ndk --version "$CARGO_NDK_VERSION" --locked --root "$TOOLS_DIR/cargo-ndk"
+            state="installed from scratch"
+          fi
+          cargo ndk --version | grep -qF "$CARGO_NDK_VERSION"   # слой обязан работать, иначе падаем здесь
+          echo "$TOOLS_DIR/cargo-ndk/bin" >> "$GITHUB_PATH"
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+
+      - name: "Layer cargo-ndk: save"
+        if: steps.ndk-tool.outputs.state == 'installed from scratch'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ env.TOOLS_DIR }}/cargo-ndk
+          key: cargo-ndk-${{ runner.os }}-${{ env.CARGO_NDK_VERSION }}-${{ env.CACHE_SALT }}
+
+      # ───────────── Слой 2: Android SDK (NDK + платформа + build-tools) ─────────────
+      - name: "Layer Android SDK: restore"
+        id: sdk-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
+            ${{ env.ANDROID_HOME }}/platforms/android-${{ env.ANDROID_API }}
+            ${{ env.ANDROID_HOME }}/build-tools/${{ env.BUILD_TOOLS }}
+          key: android-sdk-${{ runner.os }}-ndk${{ env.NDK_VERSION }}-api${{ env.ANDROID_API }}-bt${{ env.BUILD_TOOLS }}-${{ env.CACHE_SALT }}
+
+      - name: "Layer Android SDK: verify or install"
+        id: sdk
+        run: |
+          sdk_ok() {
+            [ -f "$ANDROID_HOME/ndk/$NDK_VERSION/source.properties" ] &&
+            [ -f "$ANDROID_HOME/platforms/android-$ANDROID_API/android.jar" ] &&
+            [ -x "$ANDROID_HOME/build-tools/$BUILD_TOOLS/aapt2" ]
+          }
+          SDKMANAGER="$(command -v sdkmanager || echo "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager")"
+          # Лицензии не входят в кэш пакетов, принимаем всегда (быстро).
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+
+          if sdk_ok; then
+            state="restored from cache, verified"
+          else
+            if [ "${{ steps.sdk-cache.outputs.cache-hit }}" = "true" ]; then
+              echo "::warning::Android SDK cache was restored but is incomplete — installing from scratch"
+            fi
+            "$SDKMANAGER" --install "ndk;$NDK_VERSION" "platforms;android-$ANDROID_API" "build-tools;$BUILD_TOOLS"
+            state="installed from scratch"
+          fi
+          sdk_ok || { echo "::error::Android SDK layer is invalid after install"; exit 1; }
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+
+      - name: "Layer Android SDK: save"
+        if: steps.sdk.outputs.state == 'installed from scratch'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
+            ${{ env.ANDROID_HOME }}/platforms/android-${{ env.ANDROID_API }}
+            ${{ env.ANDROID_HOME }}/build-tools/${{ env.BUILD_TOOLS }}
+          key: android-sdk-${{ runner.os }}-ndk${{ env.NDK_VERSION }}-api${{ env.ANDROID_API }}-bt${{ env.BUILD_TOOLS }}-${{ env.CACHE_SALT }}
+
+      # ───────────── Слой 3: Gradle (дистрибутив, зависимости, кэш сборки) ─────────────
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      - name: Show cache layers
+        run: |
+          {
+            echo "### Слои кэша"
+            echo "| Слой | Состояние |"
+            echo "|---|---|"
+            echo "| cargo-ndk ${CARGO_NDK_VERSION} | ${{ steps.ndk-tool.outputs.state }} |"
+            echo "| Android SDK (NDK ${NDK_VERSION}, API ${ANDROID_API}, build-tools ${BUILD_TOOLS}) | ${{ steps.sdk.outputs.state }} |"
+            echo "| Gradle / Rust target | см. отчёты setup-gradle и rust-cache |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build release APK (Rust + Kotlin)
-        run: gradle :app:assembleRelease --no-daemon
+        run: gradle :app:assembleRelease --no-daemon --stacktrace
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: TytBrowser-apk
           path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
