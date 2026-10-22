@@ -68,6 +68,7 @@ import dev.tytebyte.tytbrowser.ui.matchMatch
 import dev.tytebyte.tytbrowser.ui.ripple
 import dev.tytebyte.tytbrowser.ui.shape
 import dev.tytebyte.tytbrowser.ui.text
+import dev.tytebyte.tytbrowser.ui.vectorButton
 import org.json.JSONObject
 import org.json.JSONTokener
 import java.io.ByteArrayInputStream
@@ -98,7 +99,9 @@ class BrowserActivity : Activity() {
     private var progressBar: ProgressBar? = null
     private var tabsCount: TextView? = null
     private var reloadBtn: TextView? = null
-    private var backBtn: TextView? = null
+    private var homeBtn: View? = null
+    private var backBtn: View? = null
+    private var fwdBtn: View? = null
     private var readerBtn: TextView? = null
     private var lockView: TextView? = null
     private var suggestBox: LinearLayout? = null
@@ -308,8 +311,13 @@ class BrowserActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(ctx.dp(4), ctx.dp(4), ctx.dp(4), ctx.dp(4))
         }
-        backBtn = ctx.iconButton("←", pal, 38, 18f) { goBack() }
+        // Слева: домик → назад → вперёд. Назад и вперёд показываются только когда имеют смысл.
+        homeBtn = ctx.vectorButton(R.drawable.ic_home, pal, "Главная страница", 38, if (cur.home) pal.accent else pal.text) { goHome(cur) }
+        backBtn = ctx.vectorButton(R.drawable.ic_arrow_back, pal, "Назад", 38) { goBack() }
+        fwdBtn = ctx.vectorButton(R.drawable.ic_arrow_forward, pal, "Вперёд", 38) { goForward() }
+        row.addView(homeBtn)
         row.addView(backBtn)
+        row.addView(fwdBtn)
 
         val field = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -375,6 +383,41 @@ class BrowserActivity : Activity() {
         return bar
     }
 
+    /** Домик всегда есть (на главной подсвечен), «назад» — только на странице, «вперёд» — если есть куда вернуться. */
+    private fun updateNavButtons() {
+        val web = cur.web
+        homeBtn?.let { b ->
+            (b as? android.widget.ImageView)?.setColorFilter(if (cur.home) pal.accent else pal.text, android.graphics.PorterDuff.Mode.SRC_IN)
+            b.alpha = if (cur.home) 0.9f else 1f
+        }
+        backBtn?.apply {
+            visibility = if (cur.home) View.GONE else View.VISIBLE
+            alpha = if (web?.canGoBack() == true || tabs.any { it.id == cur.parentId }) 1f else 0.4f
+        }
+        fwdBtn?.visibility = if (canGoForward()) View.VISIBLE else View.GONE
+    }
+
+    /** С главной «вперёд» возвращает на страницу, с которой ушли домой; на странице — шаг вперёд по истории. */
+    private fun canGoForward(): Boolean {
+        val web = cur.web ?: return false
+        return if (cur.home) !web.url.isNullOrBlank() && web.url != "about:blank" else web.canGoForward()
+    }
+
+    private fun goForward() {
+        val web = cur.web ?: return
+        if (cur.home) {
+            val u = web.url
+            if (u.isNullOrBlank() || u == "about:blank") return
+            cur.home = false
+            cur.url = u
+            cur.pageUrl = u
+            showContent()
+            render()
+        } else if (web.canGoForward()) {
+            web.goForward()
+        }
+    }
+
     private fun displayText(): String = when {
         cur.home -> ""
         else -> Db.hostOf(cur.url).ifBlank { cur.url }
@@ -396,7 +439,7 @@ class BrowserActivity : Activity() {
         reloadBtn?.text = if (cur.loading) "✕" else "⟳"
         reloadBtn?.visibility = if (cur.home) View.GONE else View.VISIBLE
         readerBtn?.visibility = if (cur.home || cur.loading) View.GONE else View.VISIBLE
-        backBtn?.alpha = if (cur.home && cur.parentId == -1L) 0.35f else 1f
+        updateNavButtons()
         updateTabsCount()
     }
 

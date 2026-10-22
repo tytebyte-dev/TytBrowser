@@ -12,6 +12,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 
@@ -87,6 +88,21 @@ fun Context.iconButton(glyph: String, pal: Pal, sizeDp: Int = 40, textSp: Float 
         isClickable = true
         isFocusable = true
         contentDescription = glyph
+        setOnClickListener { onClick() }
+    }
+
+/** Круглая кнопка с векторной иконкой (тонируется цветом текста палитры). */
+fun Context.vectorButton(resId: Int, pal: Pal, description: String, sizeDp: Int = 38, tint: Int = pal.text, onClick: () -> Unit): ImageView =
+    ImageView(this).apply {
+        setImageResource(resId)
+        setColorFilter(tint, android.graphics.PorterDuff.Mode.SRC_IN)
+        scaleType = ImageView.ScaleType.CENTER_INSIDE
+        setPadding(dp(9), dp(9), dp(9), dp(9))
+        layoutParams = LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp))
+        background = ripple(pal.ripple, null, shape(Color.WHITE, dp(sizeDp).toFloat()))
+        contentDescription = description
+        isClickable = true
+        isFocusable = true
         setOnClickListener { onClick() }
     }
 
