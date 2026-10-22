@@ -50,7 +50,7 @@ gradle :app:assembleDebug -PskipRust           # без пересборки Rus
 ```
 
 Gradle wrapper в репозиторий не добавлен: либо системный `gradle` 8.9+, либо `gradle wrapper --gradle-version 8.9`.
-GitHub Actions (`.github/workflows/build.yml`) прогоняет тесты Rust и собирает APK.
+GitHub Actions (`.github/workflows/build.yml`) прогоняет тесты Rust и собирает APK. Тяжёлые слои (cargo-ndk, Android SDK/NDK, Gradle, Rust-таргет) кэшируются: на каждом запуске слой сначала восстанавливается и проверяется, а если его нет или он повреждён, ставится заново и сохраняется. Сброс всех слоёв: поменять `CACHE_SALT` в workflow.
 Для подписи релиза задайте `TYT_KEYSTORE`, `TYT_KEYSTORE_PASSWORD`, `TYT_KEY_ALIAS`, `TYT_KEY_PASSWORD`.
 
 ## Свои правила блокировки
