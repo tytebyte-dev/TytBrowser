@@ -127,6 +127,8 @@ class BrowserActivity : Activity() {
 
         Core.configureBlocker(prefs.blockAds, prefs.blockTrackers)
         loadUserRules()
+        // Прокси поднимаем до создания WebView, чтобы ни один запрос не ушёл напрямую.
+        ProxyManager.apply(this, prefs)
 
         root = FrameLayout(this)
         main = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -964,6 +966,7 @@ class BrowserActivity : Activity() {
                     }
                 },
                 onClearData = { clearAllData() },
+                onProxy = { openProxy() },
                 onSetDefault = {
                     startExternal(Intent(android.provider.Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
                 },
@@ -971,6 +974,14 @@ class BrowserActivity : Activity() {
             ).root
         )
     }
+
+    private fun openProxy() = openPanel(
+        dev.tytebyte.tytbrowser.ui.ProxyPanel(
+            themed(), pal, prefs,
+            onApply = { ProxyManager.apply(this, prefs) },
+            close = { closePanel(); openSettings() },
+        ).root
+    )
 
     // ───────────────────────── режим чтения ─────────────────────────
 
