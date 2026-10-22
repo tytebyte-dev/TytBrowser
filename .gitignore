@@ -1,0 +1,14 @@
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+captures/
+.cxx/
+*.keystore
+*.jks
+# Rust
+core/target/
+core/Cargo.lock.bak
+# Собираемые нативные библиотеки (генерируются cargo-ndk)
+app/src/main/jniLibs/
