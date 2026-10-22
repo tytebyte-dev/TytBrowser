@@ -1,0 +1,20 @@
+[package]
+name = "tytcore"
+version = "0.1.0"
+edition = "2021"
+description = "Нативное ядро TytBrowser: омнибокс, блокировщик рекламы/трекеров, режим чтения, подсказки"
+license = "MIT"
+publish = false
+
+[lib]
+name = "tytcore"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+jni = "0.21"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

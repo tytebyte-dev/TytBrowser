@@ -1,0 +1,6 @@
+{
+  "name": "Aura Lite - Android Browser UI",
+  "description": "Легковесный и простой веб-браузер для Android 10 и ниже со светлой и тёмной темой, гибкой навигацией и режимом экономии памяти.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
