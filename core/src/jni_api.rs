@@ -206,3 +206,22 @@ pub extern "system" fn Java_dev_tytebyte_tytbrowser_core_NativeCore_proxyParse<'
     let out = guard("[]".to_string(), || crate::proxylink::parse_many_json(&text));
     ret(&mut env, &out)
 }
+
+/// Журнал встроенного прокси (для диагностики в приложении).
+#[no_mangle]
+pub extern "system" fn Java_dev_tytebyte_tytbrowser_core_NativeCore_xrayLog<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+) -> jstring {
+    let t = guard(String::new(), || {
+        #[cfg(feature = "xray")]
+        {
+            crate::xray::log_text()
+        }
+        #[cfg(not(feature = "xray"))]
+        {
+            String::new()
+        }
+    });
+    ret(&mut env, &t)
+}

@@ -7,6 +7,51 @@ use std::time::{Duration, Instant};
 use tokio::runtime::{Builder, Runtime};
 use tokio::task::JoinHandle;
 
+const LOG_CAP: usize = 64 * 1024;
+static LOG: Mutex<String> = Mutex::new(String::new());
+
+/// Писатель журнала tracing: складывает строки в кольцевой буфер, чтобы их можно было показать в приложении.
+#[derive(Clone, Copy)]
+struct LogWriter;
+
+impl std::io::Write for LogWriter {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        let mut g = LOG.lock().unwrap_or_else(|e| e.into_inner());
+        g.push_str(&String::from_utf8_lossy(b));
+        if g.len() > LOG_CAP {
+            let mut cut = g.len() - LOG_CAP / 2;
+            while !g.is_char_boundary(cut) {
+                cut += 1;
+            }
+            g.drain(..cut);
+        }
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogWriter {
+    type Writer = LogWriter;
+    fn make_writer(&'a self) -> Self::Writer {
+        *self
+    }
+}
+
+fn init_log() {
+    let _ = tracing_subscriber::fmt()
+        .with_writer(LogWriter)
+        .with_ansi(false)
+        .with_max_level(tracing::Level::DEBUG)
+        .try_init();
+}
+
+/// Журнал ядра прокси (последние сообщения).
+pub fn log_text() -> String {
+    LOG.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 struct Running {
     rt: Runtime,
     handles: Vec<JoinHandle<()>>,
@@ -22,7 +67,10 @@ fn lock() -> std::sync::MutexGuard<'static, Option<Running>> {
 /// Запускает прокси по ссылке (vless/vmess/trojan/ss). Уже работающий экземпляр перезапускается.
 pub fn start(link: &str, port: u16) -> Result<(), String> {
     let cfg = proxylink::build_config(link, port)?;
+    init_log();
     stop();
+    LOG.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    log_line(&format!("запуск прокси на 127.0.0.1:{port}"));
     let rt = Builder::new_multi_thread()
         .worker_threads(2)
         .thread_name("tyt-xray")
@@ -45,6 +93,7 @@ pub fn start(link: &str, port: u16) -> Result<(), String> {
     let handles = match started {
         Ok(h) => h,
         Err(e) => {
+            log_line(&format!("ошибка запуска: {e}"));
             rt.shutdown_background();
             return Err(e);
         }
@@ -81,4 +130,9 @@ pub fn stop() {
 /// Порт работающего прокси или 0.
 pub fn running_port() -> u16 {
     lock().as_ref().map(|r| r.port).unwrap_or(0)
+}
+
+fn log_line(s: &str) {
+    use std::io::Write;
+    let _ = writeln!(LogWriter, "[tytcore] {s}");
 }

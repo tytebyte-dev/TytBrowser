@@ -13,12 +13,14 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = ["xray"]
 # Встроенный прокси (xray-rs). Без него ядро собирается без сетевых зависимостей.
-xray = ["dep:xray-rs", "dep:tokio"]
+xray = ["dep:xray-rs", "dep:tokio", "dep:tracing-subscriber", "dep:tracing"]
 
 [dependencies]
 jni = "0.21"
 xray-rs = { path = "third_party/xray-rs", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time"], optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"], optional = true }
 
 [profile.release]
 opt-level = "z"

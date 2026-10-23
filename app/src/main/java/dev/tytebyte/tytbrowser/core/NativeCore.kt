@@ -13,6 +13,7 @@ object NativeCore {
     @JvmStatic external fun extractReadable(html: String, baseUrl: String): String
     @JvmStatic external fun xrayStart(link: String, port: Int): String
     @JvmStatic external fun xrayStop()
+    @JvmStatic external fun xrayLog(): String
     @JvmStatic external fun xrayPort(): Int
     @JvmStatic external fun proxyParse(text: String): String
     @JvmStatic external fun suggest(query: String, entries: String, limit: Int, now: Long): String
@@ -86,6 +87,8 @@ object Core {
     }
 
     fun proxyStop() { if (loaded) safe(Unit) { NativeCore.xrayStop() } }
+
+    fun proxyLog(): String = if (loaded) safe("") { NativeCore.xrayLog() } else ""
 
     fun proxyPort(): Int = if (loaded) safe(0) { NativeCore.xrayPort() } else 0
 
