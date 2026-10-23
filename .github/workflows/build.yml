@@ -51,6 +51,12 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      # Оригинальное ядро Xray-core (Go). Версия берётся из xraycore/go.mod; модули и сборочный кэш — по go.sum.
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: xraycore/go.mod
+          cache-dependency-path: xraycore/go.sum
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android

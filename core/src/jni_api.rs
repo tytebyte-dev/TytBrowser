@@ -140,61 +140,6 @@ pub extern "system" fn Java_dev_tytebyte_tytbrowser_core_NativeCore_suggest<'l>(
     ret(&mut env, &out)
 }
 
-/// Запуск встроенного прокси. Пустая строка — успех, иначе текст ошибки.
-#[no_mangle]
-pub extern "system" fn Java_dev_tytebyte_tytbrowser_core_NativeCore_xrayStart<'l>(
-    mut env: JNIEnv<'l>,
-    _class: JClass<'l>,
-    link: JString<'l>,
-    port: jint,
-) -> jstring {
-    let link = get(&mut env, &link);
-    let msg = guard("внутренняя ошибка ядра".to_string(), || {
-        #[cfg(feature = "xray")]
-        {
-            match u16::try_from(port) {
-                Ok(p) if p > 0 => crate::xray::start(&link, p).err().unwrap_or_default(),
-                _ => "некорректный порт".to_string(),
-            }
-        }
-        #[cfg(not(feature = "xray"))]
-        {
-            let _ = (&link, port);
-            "ядро собрано без прокси".to_string()
-        }
-    });
-    ret(&mut env, &msg)
-}
-
-#[no_mangle]
-pub extern "system" fn Java_dev_tytebyte_tytbrowser_core_NativeCore_xrayStop<'l>(
-    _env: JNIEnv<'l>,
-    _class: JClass<'l>,
-) {
-    guard((), || {
-        #[cfg(feature = "xray")]
-        crate::xray::stop();
-    })
-}
-
-/// Порт работающего прокси или 0.
-#[no_mangle]
-pub extern "system" fn Java_dev_tytebyte_tytbrowser_core_NativeCore_xrayPort<'l>(
-    _env: JNIEnv<'l>,
-    _class: JClass<'l>,
-) -> jint {
-    guard(0, || {
-        #[cfg(feature = "xray")]
-        {
-            crate::xray::running_port() as jint
-        }
-        #[cfg(not(feature = "xray"))]
-        {
-            0
-        }
-    })
-}
-
 /// Разбор текста со ссылками: JSON-массив профилей.
 #[no_mangle]
 pub extern "system" fn Java_dev_tytebyte_tytbrowser_core_NativeCore_proxyParse<'l>(
@@ -207,21 +152,18 @@ pub extern "system" fn Java_dev_tytebyte_tytbrowser_core_NativeCore_proxyParse<'
     ret(&mut env, &out)
 }
 
-/// Журнал встроенного прокси (для диагностики в приложении).
+/// Конфигурация Xray для ссылки и локального порта. При ошибке строка начинается с «!».
 #[no_mangle]
-pub extern "system" fn Java_dev_tytebyte_tytbrowser_core_NativeCore_xrayLog<'l>(
+pub extern "system" fn Java_dev_tytebyte_tytbrowser_core_NativeCore_proxyConfig<'l>(
     mut env: JNIEnv<'l>,
     _class: JClass<'l>,
+    link: JString<'l>,
+    port: jint,
 ) -> jstring {
-    let t = guard(String::new(), || {
-        #[cfg(feature = "xray")]
-        {
-            crate::xray::log_text()
-        }
-        #[cfg(not(feature = "xray"))]
-        {
-            String::new()
-        }
+    let link = get(&mut env, &link);
+    let out = guard("!внутренняя ошибка ядра".to_string(), || match u16::try_from(port) {
+        Ok(p) if p > 0 => crate::proxylink::build_config(&link, p).unwrap_or_else(|e| format!("!{e}")),
+        _ => "!некорректный порт".to_string(),
     });
-    ret(&mut env, &t)
+    ret(&mut env, &out)
 }

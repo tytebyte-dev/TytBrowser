@@ -104,12 +104,17 @@ struct Stream<'a> {
     pbk: &'a str,
     sid: &'a str,
     spx: &'a str,
+    service: &'a str,
+    mode: &'a str,
 }
 
 fn stream_json(s: &Stream, fallback_sni: &str) -> Result<String, String> {
     let network = if s.network.is_empty() { "tcp" } else { s.network };
-    if network != "tcp" && network != "ws" {
-        return Err(format!("транспорт «{}» не поддерживается (доступны tcp и ws)", network));
+    if !matches!(network, "tcp" | "ws" | "grpc" | "httpupgrade" | "xhttp") {
+        return Err(format!(
+            "транспорт «{}» не поддерживается (доступны tcp, ws, grpc, httpupgrade, xhttp)",
+            network
+        ));
     }
     let mut o = format!("{{\"network\":{}", json::string(network));
     let sni = if s.sni.is_empty() { fallback_sni } else { s.sni };
@@ -128,17 +133,51 @@ fn stream_json(s: &Stream, fallback_sni: &str) -> Result<String, String> {
             o.push('}');
         }
         "reality" => {
-            return Err("REALITY не поддерживается встроенным ядром xray-rs (клиентская часть не реализована)".into());
+            if s.pbk.is_empty() {
+                return Err("для REALITY нужен параметр pbk (публичный ключ)".into());
+            }
+            o.push_str(",\"security\":\"reality\",\"realitySettings\":{\"serverName\":");
+            o.push_str(&json::string(sni));
+            o.push_str(&format!(
+                ",\"fingerprint\":{},\"publicKey\":{},\"shortId\":{}",
+                json::string(if s.fp.is_empty() { "chrome" } else { s.fp }),
+                json::string(s.pbk),
+                json::string(s.sid)
+            ));
+            if !s.spx.is_empty() {
+                o.push_str(&format!(",\"spiderX\":{}", json::string(s.spx)));
+            }
+            o.push('}');
         }
         "" | "none" => {}
         other => return Err(format!("тип защиты «{}» не поддерживается", other)),
     }
-    if network == "ws" {
-        o.push_str(&format!(
-            ",\"wsSettings\":{{\"path\":{},\"host\":{}}}",
-            json::string(if s.path.is_empty() { "/" } else { s.path }),
-            json::string(if s.host.is_empty() { sni } else { s.host })
-        ));
+    let path = if s.path.is_empty() { "/" } else { s.path };
+    let host = if s.host.is_empty() { sni } else { s.host };
+    match network {
+        "ws" => o.push_str(&format!(
+            ",\"wsSettings\":{{\"path\":{},\"headers\":{{\"Host\":{}}}}}",
+            json::string(path),
+            json::string(host)
+        )),
+        "grpc" => o.push_str(&format!(",\"grpcSettings\":{{\"serviceName\":{}}}", json::string(s.service))),
+        "httpupgrade" => o.push_str(&format!(
+            ",\"httpupgradeSettings\":{{\"path\":{},\"host\":{}}}",
+            json::string(path),
+            json::string(host)
+        )),
+        "xhttp" => {
+            o.push_str(&format!(
+                ",\"xhttpSettings\":{{\"path\":{},\"host\":{}",
+                json::string(path),
+                json::string(host)
+            ));
+            if !s.mode.is_empty() {
+                o.push_str(&format!(",\"mode\":{}", json::string(s.mode)));
+            }
+            o.push('}');
+        }
+        _ => {}
     }
     o.push('}');
     Ok(o)
@@ -177,6 +216,8 @@ fn parse_vless_trojan(scheme: &str, rest: &str) -> Result<ProxyLink, String> {
         pbk: q(&p, "pbk"),
         sid: q(&p, "sid"),
         spx: q(&p, "spx"),
+        service: q(&p, "serviceName"),
+        mode: q(&p, "mode"),
     };
     let stream = stream_json(&st, &host)?;
     let settings = if scheme == "vless" {
@@ -184,7 +225,7 @@ fn parse_vless_trojan(scheme: &str, rest: &str) -> Result<ProxyLink, String> {
             return Err("UUID должен содержать 36 символов".into());
         }
         format!(
-            "{{\"vnext\":[{{\"address\":{},\"port\":{},\"users\":[{{\"id\":{}{}}}]}}]}}",
+            "{{\"vnext\":[{{\"address\":{},\"port\":{},\"users\":[{{\"id\":{},\"encryption\":\"none\"{}}}]}}]}}",
             json::string(&host), port, json::string(&cred),
             if q(&p, "flow").is_empty() { String::new() } else { format!(",\"flow\":{}", json::string(q(&p, "flow"))) }
         )
@@ -257,6 +298,8 @@ fn parse_vmess(rest: &str) -> Result<ProxyLink, String> {
         pbk: "",
         sid: "",
         spx: "",
+        service: &flat_field(&js, "path"),
+        mode: "",
     };
     let stream = stream_json(&st, &host)?;
     let ps = flat_field(&js, "ps");
@@ -264,7 +307,7 @@ fn parse_vmess(rest: &str) -> Result<ProxyLink, String> {
         name: if ps.trim().is_empty() { format!("{}:{}", host, port) } else { ps },
         protocol: "vmess".into(),
         outbound: format!(
-            "{{\"tag\":\"proxy\",\"protocol\":\"vmess\",\"settings\":{{\"vnext\":[{{\"address\":{},\"port\":{},\"users\":[{{\"id\":{}}}]}}]}},\"streamSettings\":{}}}",
+            "{{\"tag\":\"proxy\",\"protocol\":\"vmess\",\"settings\":{{\"vnext\":[{{\"address\":{},\"port\":{},\"users\":[{{\"id\":{},\"security\":\"auto\"}}]}}]}},\"streamSettings\":{}}}",
             json::string(&host), port, json::string(&id), stream
         ),
         host,
@@ -328,11 +371,12 @@ pub fn parse_many_json(text: &str) -> String {
     format!("[{}]", items.join(","))
 }
 
-/// Полная конфигурация Xray: локальный mixed (HTTP+SOCKS) на 127.0.0.1:port, всё уходит в outbound `proxy`.
+/// Полная конфигурация Xray: локальный HTTP-прокси на 127.0.0.1:port, весь трафик уходит в outbound `proxy`.
+/// В Android нет /etc/resolv.conf, поэтому DNS-серверы заданы явно (адрес сервера прокси может быть доменом).
 pub fn build_config(link: &str, listen_port: u16) -> Result<String, String> {
     let p = parse(link)?;
     Ok(format!(
-        "{{\"log\":{{\"loglevel\":\"warning\"}},\"inbounds\":[{{\"tag\":\"in\",\"port\":{},\"listen\":\"127.0.0.1\",\"protocol\":\"mixed\",\"settings\":{{}}}}],\"outbounds\":[{}],\"routing\":{{\"rules\":[{{\"outboundTag\":\"proxy\",\"inboundTag\":[\"in\"]}}]}}}}",
+        "{{\"log\":{{\"loglevel\":\"warning\"}},\"dns\":{{\"servers\":[\"1.1.1.1\",\"8.8.8.8\",\"localhost\"]}},\"inbounds\":[{{\"tag\":\"in\",\"port\":{},\"listen\":\"127.0.0.1\",\"protocol\":\"http\",\"settings\":{{}}}}],\"outbounds\":[{}]}}",
         listen_port, p.outbound
     ))
 }
@@ -344,9 +388,13 @@ mod tests {
     const U: &str = "11111111-2222-3333-4444-555555555555";
 
     #[test]
-    fn vless_reality_rejected_and_flow_kept() {
-        let l = format!("vless://{}@1.2.3.4:443?type=tcp&security=reality&sni=ex.com&pbk=KEY&sid=ab", U);
-        assert!(parse(&l).unwrap_err().contains("REALITY"));
+    fn vless_reality_and_flow() {
+        let l = format!("vless://{}@1.2.3.4:443?type=tcp&security=reality&sni=ex.com&pbk=KEY&sid=ab&flow=xtls-rprx-vision", U);
+        let r = parse(&l).unwrap();
+        assert!(r.outbound.contains("\"publicKey\":\"KEY\"") && r.outbound.contains("\"shortId\":\"ab\""));
+        assert!(r.outbound.contains("\"fingerprint\":\"chrome\"") && r.outbound.contains("\"encryption\":\"none\""));
+        let l = format!("vless://{}@1.2.3.4:443?security=reality&sni=a", U);
+        assert!(parse(&l).is_err());
         let l = format!("vless://{}@1.2.3.4:443?security=tls&flow=xtls-rprx-vision#My%20Node", U);
         let p = parse(&l).unwrap();
         assert_eq!(p.name, "My Node");
@@ -357,15 +405,18 @@ mod tests {
     fn vless_ws_tls() {
         let l = format!("vless://{}@h.example:8443?type=ws&security=tls&path=%2Fws&host=cdn.x&sni=s.x#n", U);
         let p = parse(&l).unwrap();
-        assert!(p.outbound.contains("\"path\":\"/ws\""));
+        assert!(p.outbound.contains("\"path\":\"/ws\"") && p.outbound.contains("\"Host\":\"cdn.x\""));
         assert!(p.outbound.contains("\"serverName\":\"s.x\""));
-        assert!(p.outbound.contains("\"host\":\"cdn.x\""));
     }
 
     #[test]
     fn unsupported_transport() {
-        let l = format!("vless://{}@h:443?type=grpc&security=tls", U);
-        assert!(parse(&l).unwrap_err().contains("grpc"));
+        let l = format!("vless://{}@h:443?type=kcp&security=tls", U);
+        assert!(parse(&l).unwrap_err().contains("kcp"));
+        let l = format!("vless://{}@h:443?type=grpc&security=tls&serviceName=svc", U);
+        assert!(parse(&l).unwrap().outbound.contains("\"serviceName\":\"svc\""));
+        let l = format!("vless://{}@h:443?type=xhttp&security=tls&path=%2Fx&mode=auto", U);
+        assert!(parse(&l).unwrap().outbound.contains("\"mode\":\"auto\""));
     }
 
     #[test]
@@ -400,7 +451,7 @@ mod tests {
     fn config_and_many() {
         let l = format!("vless://{}@1.2.3.4:443?security=tls#a", U);
         let c = build_config(&l, 10808).unwrap();
-        assert!(c.contains("\"port\":10808") && c.contains("\"mixed\""));
+        assert!(c.contains("\"port\":10808") && c.contains("\"protocol\":\"http\""));
         let txt = format!("{}\njunk\nss://{}@1.1.1.1:1#b", l, b64_encode(b"aes-128-gcm:x"));
         let m = parse_many_json(&txt);
         assert!(m.starts_with("[{") && m.contains("\"name\":\"b\""));

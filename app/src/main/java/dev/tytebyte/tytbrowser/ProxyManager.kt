@@ -10,7 +10,7 @@ import dev.tytebyte.tytbrowser.data.Prefs
 import java.util.concurrent.Executor
 
 /**
- * Встроенный прокси: ядро Xray (Rust) слушает 127.0.0.1 внутри приложения,
+ * Встроенный прокси: ядро Xray-core (Go) слушает 127.0.0.1 внутри приложения,
  * а весь трафик WebView направляется в него через ProxyController.
  * Если прокси включён, но не работает, прямое соединение НЕ используется (трафик не утекает).
  */
@@ -18,7 +18,7 @@ object ProxyManager {
     const val PORT = 10808
     private val direct = Executor { it.run() }
 
-    val supported: Boolean get() = Core.loaded && WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)
+    val supported: Boolean get() = Core.loaded && dev.tytebyte.tytbrowser.core.XrayNative.loaded && WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)
 
     fun isRunning(): Boolean = Core.proxyPort() > 0
 

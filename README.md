@@ -15,7 +15,7 @@
 - очистка ссылок от `utm_*`, `fbclid`, `gclid`… при копировании и «Поделиться»;
 - темы: светлая, тёмная, AMOLED; открытие ссылок из других приложений, «Поделиться» в браузер;
 - выгрузка фоновых вкладок из памяти;
-- встроенный прокси на [xray-rs](https://github.com/abc15018045126/xray-rs): импорт `vless://`, `vmess://`, `trojan://`, `ss://` из буфера, переключатель в «Настройки → Сеть».
+- встроенный прокси на оригинальном [Xray-core](https://github.com/XTLS/Xray-core): импорт `vless://`, `vmess://`, `trojan://`, `ss://` из буфера, переключатель в «Настройки → Сеть».
 
 ## Устройство
 
@@ -39,15 +39,16 @@ Kotlin-реализации (без блокировки и режима чте�
 
 ## Сборка
 
-Нужны: JDK 17, Android SDK 34, NDK 26, Rust (stable) с таргетами Android и `cargo-ndk`.
+Нужны: JDK 17, Android SDK 34, NDK 26 (`ANDROID_NDK_HOME`), Rust (stable) с таргетами Android и `cargo-ndk`, Go (версия из `xraycore/go.mod`).
 
 ```bash
 rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
 cargo install cargo-ndk
 
 cargo test --manifest-path core/Cargo.toml     # тесты ядра
-gradle :app:assembleDebug                      # Rust соберётся автоматически (задача cargoNdk)
+gradle :app:assembleDebug                      # Rust (cargoNdk) и Xray-core (goXray) соберутся автоматически
 gradle :app:assembleDebug -PskipRust           # без пересборки Rust, если .so уже в app/src/main/jniLibs
+gradle :app:assembleDebug -PskipGo             # без пересборки Xray (Go); вручную: scripts/build-xray.sh
 ```
 
 Gradle wrapper в репозиторий не добавлен: либо системный `gradle` 8.9+, либо `gradle wrapper --gradle-version 8.9`.
@@ -66,15 +67,18 @@ GitHub Actions (`.github/workflows/build.yml`) прогоняет тесты Rus
   они общие с обычными вкладками (кнопка «Очистить данные» удаляет всё).
 - Блокировка работает на уровне запросов WebView (домены и префиксы путей), косметических фильтров нет.
 - Расширений и синхронизации нет.
-- Встроенный прокси: ядро Xray запускается внутри приложения (слушает 127.0.0.1:10808), трафик страниц WebView идёт через него
-  (`androidx.webkit.ProxyController`, нужен WebView с поддержкой `PROXY_OVERRIDE`). Загрузки файлов (DownloadManager) и системные
-  запросы идут напрямую. Поддерживаются транспорты tcp и ws, защита TLS и flow (xtls-rprx-vision); REALITY встроенное ядро не умеет (клиентская часть в xray-rs не подключена), grpc/h2/quic и такие ссылки пропускаются.
-  Если прокси включён, но не запустился, он выключается с сообщением, а прямой запасной маршрут при работе не используется.
+- Встроенный прокси: оригинальное ядро Xray-core (Go, `xraycore/`, собирается в `libtytxray.so` через NDK) запускается внутри
+  приложения и слушает HTTP на 127.0.0.1:10808; трафик страниц WebView идёт через него (`androidx.webkit.ProxyController`,
+  нужен WebView с поддержкой `PROXY_OVERRIDE`). Загрузки файлов (DownloadManager) и системные запросы идут напрямую.
+  Поддерживаются VLESS, VMess, Trojan, Shadowsocks; tcp, ws, grpc, httpupgrade, xhttp; TLS и REALITY; flow (Vision).
+  Остальные ссылки пропускаются. Если прокси включён, но не запустился, он выключается с сообщением, а прямой запасной маршрут
+  при работе не используется. Библиотека Go увеличивает APK примерно на 10–15 МБ на ABI.
 
 ## Сторонний код
 
-`core/third_party/xray-rs` — порт Xray-core на Rust (лицензия MIT OR Apache-2.0, см. `core/third_party/xray-rs/LICENSE`),
-взят без изменений исходников, кроме манифеста (убраны исполняемые цели). Проект Stygian (AGPL-3.0) не включён из-за несовместимости лицензий.
+`xraycore/` — исходники [Xray-core](https://github.com/XTLS/Xray-core) v26.3.27 (лицензия MPL-2.0, см. `xraycore/LICENSE`),
+без тестов; добавлен только пакет `xraycore/libtyt` (обёртка c-shared + JNI). Проект Stygian (AGPL-3.0) не включён из-за
+несовместимости лицензий.
 
 ## Подпись
 
