@@ -6,6 +6,7 @@ import "C"
 
 import (
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -62,10 +63,14 @@ func stopLocked() {
 	}
 }
 
-func start(cfgJSON string, listenPort int) string {
+func start(cfgJSON string, listenPort int, assetDir string) string {
 	mu.Lock()
 	defer mu.Unlock()
 	stopLocked()
+	if assetDir != "" {
+		// Базы geoip.dat / geosite.dat ядро ищет в этой папке.
+		_ = os.Setenv("XRAY_LOCATION_ASSET", assetDir)
+	}
 	logLock.Lock()
 	logBuf.Reset()
 	logLock.Unlock()
@@ -119,8 +124,8 @@ func itoa(n int) string {
 }
 
 //export TytStart
-func TytStart(cfg *C.char, listenPort C.int) *C.char {
-	return C.CString(start(C.GoString(cfg), int(listenPort)))
+func TytStart(cfg *C.char, listenPort C.int, assetDir *C.char) *C.char {
+	return C.CString(start(C.GoString(cfg), int(listenPort), C.GoString(assetDir)))
 }
 
 //export TytStop

@@ -7,6 +7,7 @@ import androidx.webkit.ProxyController
 import androidx.webkit.WebViewFeature
 import dev.tytebyte.tytbrowser.core.Core
 import dev.tytebyte.tytbrowser.data.Prefs
+import dev.tytebyte.tytbrowser.data.RouteRules
 import java.util.concurrent.Executor
 
 /**
@@ -22,10 +23,16 @@ object ProxyManager {
 
     fun isRunning(): Boolean = Core.proxyPort() > 0
 
+    /** Ссылки звеньев в порядке «вход → выход»: цепочка либо один выбранный профиль. */
+    fun activeLinks(prefs: Prefs): String {
+        val chain = prefs.proxyChain.lines().map(String::trim).filter(String::isNotEmpty)
+        return if (prefs.proxyUseChain && chain.isNotEmpty()) chain.joinToString("\n") else prefs.proxyActiveLink
+    }
+
     /** Применяет сохранённое состояние: запускает ядро и включает маршрутизацию WebView либо выключает её. */
     fun apply(ctx: Context, prefs: Prefs) {
-        val link = prefs.proxyActiveLink
-        if (!prefs.proxyEnabled || link.isEmpty()) {
+        val links = activeLinks(prefs)
+        if (!prefs.proxyEnabled || links.isEmpty()) {
             disable()
             return
         }
@@ -35,7 +42,16 @@ object ProxyManager {
             Toast.makeText(ctx, "Прокси недоступен: нужен свежий Android System WebView", Toast.LENGTH_LONG).show()
             return
         }
-        val err = Core.proxyStart(link, PORT)
+        val rules = RouteRules.coreText(RouteRules.decode(prefs.proxyRules))
+        val need = Core.proxyNeedGeo(rules)
+        val missing = (need and 1 != 0 && !GeoData.has(ctx, "geoip.dat")) || (need and 2 != 0 && !GeoData.has(ctx, "geosite.dat"))
+        if (missing) {
+            prefs.proxyEnabled = false
+            disable()
+            Toast.makeText(ctx, "Правила используют geoip/geosite: скачайте базы в «Правила маршрутизации»", Toast.LENGTH_LONG).show()
+            return
+        }
+        val err = Core.proxyStart(links, rules, if (prefs.proxyDefaultDirect) "direct" else "proxy", PORT, GeoData.dir(ctx).absolutePath)
         if (err != null) {
             prefs.proxyEnabled = false
             disable()

@@ -975,11 +975,20 @@ class BrowserActivity : Activity() {
         )
     }
 
-    private fun openProxy() = openPanel(
+    private fun openProxy(): Unit = openPanel(
         dev.tytebyte.tytbrowser.ui.ProxyPanel(
             themed(), pal, prefs,
             onApply = { ProxyManager.apply(this, prefs) },
+            onRules = { openRules() },
             close = { closePanel(); openSettings() },
+        ).root
+    )
+
+    private fun openRules(): Unit = openPanel(
+        dev.tytebyte.tytbrowser.ui.RulesPanel(
+            themed(), pal, prefs,
+            onApply = { ProxyManager.apply(this, prefs) },
+            close = { closePanel(); openProxy() },
         ).root
     )
 

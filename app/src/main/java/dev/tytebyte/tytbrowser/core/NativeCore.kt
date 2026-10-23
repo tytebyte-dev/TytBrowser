@@ -12,7 +12,8 @@ object NativeCore {
     @JvmStatic external fun blockerCheck(url: String, pageUrl: String): Int
     @JvmStatic external fun extractReadable(html: String, baseUrl: String): String
     @JvmStatic external fun proxyParse(text: String): String
-    @JvmStatic external fun proxyConfig(link: String, port: Int): String
+    @JvmStatic external fun proxyConfig(links: String, rules: String, defaultAction: String, port: Int): String
+    @JvmStatic external fun proxyNeedGeo(rules: String): Int
     @JvmStatic external fun suggest(query: String, entries: String, limit: Int, now: Long): String
 }
 
@@ -76,13 +77,20 @@ object Core {
         return Resolved(InputKind.SEARCH, base + q, s)
     }
 
-    /** Запуск встроенного прокси (Xray-core). Возвращает null при успехе или текст ошибки. */
-    fun proxyStart(link: String, port: Int): String? {
+    /** Какие базы geo нужны правилам: бит 0 — geoip.dat, бит 1 — geosite.dat. */
+    fun proxyNeedGeo(rules: String): Int = if (loaded) safe(0) { NativeCore.proxyNeedGeo(rules) } else 0
+
+    /**
+     * Запуск встроенного прокси (Xray-core). [links] — звенья цепочки по одной ссылке в строке (от входа к выходу),
+     * [rules] — правила в текстовом формате [dev.tytebyte.tytbrowser.data.RouteRules.coreText].
+     * Возвращает null при успехе или текст ошибки.
+     */
+    fun proxyStart(links: String, rules: String, defaultAction: String, port: Int, assetDir: String): String? {
         if (!loaded) return "нативное ядро не загружено"
         if (!XrayNative.loaded) return "ядро Xray не загружено (libtytxray.so)"
-        val cfg = safe("!внутренняя ошибка") { NativeCore.proxyConfig(link, port) }
+        val cfg = safe("!внутренняя ошибка") { NativeCore.proxyConfig(links, rules, defaultAction, port) }
         if (cfg.startsWith("!")) return cfg.substring(1)
-        val r = try { XrayNative.start(cfg, port) } catch (e: Throwable) { e.message ?: "ошибка запуска" }
+        val r = try { XrayNative.start(cfg, port, assetDir) } catch (e: Throwable) { e.message ?: "ошибка запуска" }
         return r.ifEmpty { null }
     }
 
@@ -156,7 +164,7 @@ data class ProxyProfile(val name: String, val protocol: String, val address: Str
 object XrayNative {
     val loaded: Boolean = try { System.loadLibrary("tytxray"); true } catch (_: Throwable) { false }
 
-    @JvmStatic external fun start(config: String, port: Int): String
+    @JvmStatic external fun start(config: String, port: Int, assetDir: String): String
     @JvmStatic external fun stop()
     @JvmStatic external fun port(): Int
     @JvmStatic external fun log(): String

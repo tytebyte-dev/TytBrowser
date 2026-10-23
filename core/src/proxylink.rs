@@ -372,14 +372,144 @@ pub fn parse_many_json(text: &str) -> String {
     format!("[{}]", items.join(","))
 }
 
-/// Полная конфигурация Xray: локальный HTTP-прокси на 127.0.0.1:port, весь трафик уходит в outbound `proxy`.
+/// Переименовывает outbound и (для цепочек) задаёт предыдущее звено через `dialerProxy`.
+/// Все outbound этого модуля начинаются с `{"tag":"proxy",`, а `streamSettings` (если есть) идёт последним полем.
+fn retarget(outbound: &str, tag: &str, dialer: Option<&str>) -> String {
+    let body = outbound.strip_prefix("{\"tag\":\"proxy\",").unwrap_or(outbound);
+    let mut o = format!("{{\"tag\":{},{}", json::string(tag), body);
+    if let Some(d) = dialer {
+        let sock = format!("\"sockopt\":{{\"dialerProxy\":{}}}", json::string(d));
+        if o.contains("\"streamSettings\":{") {
+            // …"streamSettings":{ … }}  → вставляем поле перед закрывающими `}}`
+            o.truncate(o.len() - 2);
+            o.push_str(&format!(",{}}}}}", sock));
+        } else {
+            o.truncate(o.len() - 1);
+            o.push_str(&format!(",\"streamSettings\":{{{}}}}}", sock));
+        }
+    }
+    o
+}
+
+pub const RULE_ITEM_SEP: char = '\u{1e}';
+
+fn items(field: &str) -> Vec<String> {
+    field.split(RULE_ITEM_SEP).map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()
+}
+
+fn norm_domain(d: &str) -> String {
+    let d = d.trim();
+    const PREFIXES: [&str; 6] = ["full:", "domain:", "keyword:", "regexp:", "geosite:", "ext:"];
+    let low = d.to_ascii_lowercase();
+    if PREFIXES.iter().any(|p| low.starts_with(p)) {
+        return d.to_string();
+    }
+    format!("domain:{}", d.trim_start_matches("*.").trim_start_matches('.'))
+}
+
+fn json_list(v: &[String]) -> String {
+    format!("[{}]", v.iter().map(|x| json::string(x)).collect::<Vec<_>>().join(","))
+}
+
+/// Правила маршрутизации. Одно правило на строку, поля через TAB:
+/// `действие \t домены \t ip \t порты \t сеть`; элементы внутри поля разделены [`RULE_ITEM_SEP`].
+/// Действие: proxy | direct | block. Домены: `example.com` (с поддоменами), `full:`, `keyword:`, `regexp:`, `geosite:xx`.
+/// IP: адрес, CIDR или `geoip:xx`. Порты: `80,443,1000-2000`. Сеть: `tcp`, `udp` или `tcp,udp`.
+/// Возвращает (JSON-массив правил, есть ли правила по IP).
+fn rules_json(text: &str) -> Result<(String, bool), String> {
+    let mut out = Vec::new();
+    let mut has_ip = false;
+    for (n, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let f: Vec<&str> = line.split('\t').collect();
+        let tag = match f[0].trim() {
+            "proxy" => "proxy",
+            "direct" => "direct",
+            "block" => "block",
+            other => return Err(format!("правило {}: неизвестное действие «{}»", n + 1, other)),
+        };
+        let domains: Vec<String> = items(f.get(1).copied().unwrap_or("")).iter().map(|d| norm_domain(d)).collect();
+        let ips = items(f.get(2).copied().unwrap_or(""));
+        let ports = f.get(3).copied().unwrap_or("").trim();
+        let network = f.get(4).copied().unwrap_or("").trim();
+        if domains.is_empty() && ips.is_empty() && ports.is_empty() && network.is_empty() {
+            continue; // пустое правило подошло бы ко всему трафику
+        }
+        if !network.is_empty() && !matches!(network, "tcp" | "udp" | "tcp,udp" | "udp,tcp") {
+            return Err(format!("правило {}: сеть «{}» не поддерживается", n + 1, network));
+        }
+        let mut r = format!("{{\"type\":\"field\",\"outboundTag\":\"{}\"", tag);
+        if !domains.is_empty() {
+            r.push_str(&format!(",\"domain\":{}", json_list(&domains)));
+        }
+        if !ips.is_empty() {
+            has_ip = true;
+            r.push_str(&format!(",\"ip\":{}", json_list(&ips)));
+        }
+        if !ports.is_empty() {
+            r.push_str(&format!(",\"port\":{}", json::string(ports)));
+        }
+        if !network.is_empty() {
+            r.push_str(&format!(",\"network\":{}", json::string(network)));
+        }
+        r.push('}');
+        out.push(r);
+    }
+    Ok((format!("[{}]", out.join(",")), has_ip))
+}
+
+/// Нужны ли для правил базы geo (geoip.dat / geosite.dat): (geoip, geosite).
+pub fn rules_need_geo(text: &str) -> (bool, bool) {
+    let low = text.to_ascii_lowercase();
+    (low.contains("geoip:"), low.contains("geosite:"))
+}
+
+/// Конфигурация Xray: локальный HTTP-прокси на 127.0.0.1:port, цепочка звеньев (вход → … → выход) и правила.
+/// `default_action` — куда идёт трафик, не подошедший ни под одно правило: `proxy` или `direct`.
 /// В Android нет /etc/resolv.conf, поэтому DNS-серверы заданы явно (адрес сервера прокси может быть доменом).
-pub fn build_config(link: &str, listen_port: u16) -> Result<String, String> {
-    let p = parse(link)?;
+pub fn build_chain_config(links: &[&str], rules: &str, default_action: &str, listen_port: u16) -> Result<String, String> {
+    if links.is_empty() {
+        return Err("в цепочке нет ни одного прокси".into());
+    }
+    let (rules_arr, has_ip) = rules_json(rules)?;
+    let tags: Vec<String> = (0..links.len())
+        .map(|i| if i + 1 == links.len() { "proxy".to_string() } else { format!("hop{}", i + 1) })
+        .collect();
+    let mut chain = Vec::new();
+    for (i, l) in links.iter().enumerate() {
+        let p = parse(l).map_err(|e| format!("звено {}: {}", i + 1, e))?;
+        let dialer = if i == 0 { None } else { Some(tags[i - 1].as_str()) };
+        chain.push(retarget(&p.outbound, &tags[i], dialer));
+    }
+    let direct = "{\"tag\":\"direct\",\"protocol\":\"freedom\",\"settings\":{\"domainStrategy\":\"UseIP\"}}".to_string();
+    let block = "{\"tag\":\"block\",\"protocol\":\"blackhole\"}".to_string();
+    let mut outs = Vec::new();
+    match default_action {
+        "direct" => {
+            outs.push(direct);
+            outs.extend(chain);
+        }
+        "proxy" | "" => {
+            outs.extend(chain);
+            outs.push(direct);
+        }
+        other => return Err(format!("неизвестное действие по умолчанию «{}»", other)),
+    }
+    outs.push(block);
     Ok(format!(
-        "{{\"log\":{{\"loglevel\":\"warning\"}},\"dns\":{{\"servers\":[\"1.1.1.1\",\"8.8.8.8\",\"localhost\"]}},\"inbounds\":[{{\"tag\":\"in\",\"port\":{},\"listen\":\"127.0.0.1\",\"protocol\":\"http\",\"settings\":{{}}}}],\"outbounds\":[{}]}}",
-        listen_port, p.outbound
+        "{{\"log\":{{\"loglevel\":\"warning\"}},\"dns\":{{\"servers\":[\"1.1.1.1\",\"8.8.8.8\",\"localhost\"]}},\"inbounds\":[{{\"tag\":\"in\",\"port\":{},\"listen\":\"127.0.0.1\",\"protocol\":\"http\",\"settings\":{{}}}}],\"outbounds\":[{}],\"routing\":{{\"domainStrategy\":\"{}\",\"rules\":{}}}}}",
+        listen_port,
+        outs.join(","),
+        if has_ip { "IPIfNonMatch" } else { "AsIs" },
+        rules_arr
     ))
+}
+
+/// Конфигурация для одного прокси без правил.
+pub fn build_config(link: &str, listen_port: u16) -> Result<String, String> {
+    build_chain_config(&[link], "", "proxy", listen_port)
 }
 
 #[cfg(test)]
@@ -465,6 +595,68 @@ mod tests {
         let m = parse_many_json(&txt);
         assert!(m.starts_with("[{") && m.contains("\"name\":\"b\""));
         assert!(parse("http://x").is_err());
+    }
+
+    fn balanced(s: &str) -> bool {
+        let (mut d, mut in_str, mut esc) = (0i32, false, false);
+        for c in s.chars() {
+            if in_str {
+                if esc { esc = false } else if c == '\\' { esc = true } else if c == '"' { in_str = false }
+            } else {
+                match c { '"' => in_str = true, '{' | '[' => d += 1, '}' | ']' => d -= 1, _ => {} }
+                if d < 0 { return false; }
+            }
+        }
+        d == 0 && !in_str
+    }
+
+    #[test]
+    fn chain_of_three_links_dialers() {
+        let a = format!("vless://{}@1.1.1.1:443?security=tls#a", U);
+        let b = "trojan://pw@2.2.2.2:443?sni=x#b".to_string();
+        let c = format!("ss://{}@3.3.3.3:8388#c", b64_encode(b"aes-256-gcm:k"));
+        let cfg = build_chain_config(&[&a, &b, &c], "", "proxy", 10808).unwrap();
+        assert!(balanced(&cfg), "{cfg}");
+        assert!(cfg.contains("\"tag\":\"hop1\"") && cfg.contains("\"tag\":\"hop2\"") && cfg.contains("\"tag\":\"proxy\""));
+        assert!(cfg.contains("\"dialerProxy\":\"hop1\"") && cfg.contains("\"dialerProxy\":\"hop2\""));
+        // у первого звена dialerProxy нет: ровно два упоминания на три звена
+        assert_eq!(cfg.matches("dialerProxy").count(), 2);
+        assert!(build_chain_config(&[], "", "proxy", 1).is_err());
+    }
+
+    #[test]
+    fn single_link_has_no_dialer_and_is_balanced() {
+        let cfg = build_config(&format!("vless://{}@1.1.1.1:443?security=tls", U), 10808).unwrap();
+        assert!(balanced(&cfg) && !cfg.contains("dialerProxy"));
+    }
+
+    #[test]
+    fn rules_domains_ips_ports() {
+        let sep = RULE_ITEM_SEP;
+        let rules = format!(
+            "direct\texample.com{sep}full:a.b.com{sep}geosite:category-ru\tgeoip:ru{sep}10.0.0.0/8\t80,443\ttcp\nblock\tkeyword:ads\t\t\t\n\t\t\t\t\nproxy\t*.foo.org\t\t\t"
+        );
+        let l = format!("vless://{}@1.1.1.1:443?security=tls", U);
+        let cfg = build_chain_config(&[&l], &rules, "proxy", 10808).unwrap();
+        assert!(balanced(&cfg), "{cfg}");
+        assert!(cfg.contains("\"domain\":[\"domain:example.com\",\"full:a.b.com\",\"geosite:category-ru\"]"));
+        assert!(cfg.contains("\"ip\":[\"geoip:ru\",\"10.0.0.0/8\"]") && cfg.contains("\"port\":\"80,443\""));
+        assert!(cfg.contains("\"domain\":[\"keyword:ads\"]") && cfg.contains("\"outboundTag\":\"block\""));
+        assert!(cfg.contains("\"domain\":[\"domain:foo.org\"]"));
+        assert!(cfg.contains("\"domainStrategy\":\"IPIfNonMatch\""));
+        assert_eq!(cfg.matches("\"type\":\"field\"").count(), 3); // пустое правило пропущено
+        assert!(build_chain_config(&[&l], "wat\tx.com", "proxy", 1).is_err());
+        assert!(build_chain_config(&[&l], "direct\t\t\t\tsctp", "proxy", 1).is_err());
+        assert_eq!(rules_need_geo(&rules), (true, true));
+        assert_eq!(rules_need_geo("block\tfull:x.com"), (false, false));
+    }
+
+    #[test]
+    fn default_direct_puts_direct_first() {
+        let l = format!("vless://{}@1.1.1.1:443?security=tls", U);
+        let cfg = build_chain_config(&[&l], "", "direct", 10808).unwrap();
+        assert!(cfg.find("\"tag\":\"direct\"").unwrap() < cfg.find("\"tag\":\"proxy\"").unwrap());
+        assert!(build_chain_config(&[&l], "", "zzz", 1).is_err());
     }
 
     fn b64_encode(d: &[u8]) -> String {

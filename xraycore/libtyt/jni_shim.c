@@ -10,9 +10,11 @@ static jstring to_jstring(JNIEnv *env, char *s) {
 }
 
 JNIEXPORT jstring JNICALL Java_dev_tytebyte_tytbrowser_core_XrayNative_start(
-    JNIEnv *env, jclass cls, jstring config, jint port) {
+    JNIEnv *env, jclass cls, jstring config, jint port, jstring assets) {
     const char *cfg = (*env)->GetStringUTFChars(env, config, NULL);
-    char *res = TytStart((char *)cfg, (int)port);
+    const char *dir = (*env)->GetStringUTFChars(env, assets, NULL);
+    char *res = TytStart((char *)cfg, (int)port, (char *)dir);
+    (*env)->ReleaseStringUTFChars(env, assets, dir);
     (*env)->ReleaseStringUTFChars(env, config, cfg);
     return to_jstring(env, res);
 }
