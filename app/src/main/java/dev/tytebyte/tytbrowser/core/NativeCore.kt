@@ -11,11 +11,8 @@ object NativeCore {
     @JvmStatic external fun blockerAddRules(category: Int, text: String): Int
     @JvmStatic external fun blockerCheck(url: String, pageUrl: String): Int
     @JvmStatic external fun extractReadable(html: String, baseUrl: String): String
-    @JvmStatic external fun xrayStart(link: String, port: Int): String
-    @JvmStatic external fun xrayStop()
-    @JvmStatic external fun xrayLog(): String
-    @JvmStatic external fun xrayPort(): Int
     @JvmStatic external fun proxyParse(text: String): String
+    @JvmStatic external fun proxyConfig(link: String, port: Int): String
     @JvmStatic external fun suggest(query: String, entries: String, limit: Int, now: Long): String
 }
 
@@ -79,18 +76,21 @@ object Core {
         return Resolved(InputKind.SEARCH, base + q, s)
     }
 
-    /** Запуск встроенного прокси. Возвращает null при успехе или текст ошибки. */
+    /** Запуск встроенного прокси (Xray-core). Возвращает null при успехе или текст ошибки. */
     fun proxyStart(link: String, port: Int): String? {
         if (!loaded) return "нативное ядро не загружено"
-        val r = safe("внутренняя ошибка") { NativeCore.xrayStart(link, port) }
+        if (!XrayNative.loaded) return "ядро Xray не загружено (libtytxray.so)"
+        val cfg = safe("!внутренняя ошибка") { NativeCore.proxyConfig(link, port) }
+        if (cfg.startsWith("!")) return cfg.substring(1)
+        val r = try { XrayNative.start(cfg, port) } catch (e: Throwable) { e.message ?: "ошибка запуска" }
         return r.ifEmpty { null }
     }
 
-    fun proxyStop() { if (loaded) safe(Unit) { NativeCore.xrayStop() } }
+    fun proxyStop() { if (XrayNative.loaded) try { XrayNative.stop() } catch (_: Throwable) {} }
 
-    fun proxyLog(): String = if (loaded) safe("") { NativeCore.xrayLog() } else ""
+    fun proxyPort(): Int = if (XrayNative.loaded) try { XrayNative.port() } catch (_: Throwable) { 0 } else 0
 
-    fun proxyPort(): Int = if (loaded) safe(0) { NativeCore.xrayPort() } else 0
+    fun proxyLog(): String = if (XrayNative.loaded) try { XrayNative.log() } catch (_: Throwable) { "" } else ""
 
     /** Разбор текста со ссылками vless/vmess/trojan/ss: список (имя, протокол, адрес, ссылка). */
     fun proxyParse(text: String): List<ProxyProfile> {
@@ -151,3 +151,13 @@ object Core {
 }
 
 data class ProxyProfile(val name: String, val protocol: String, val address: String, val link: String)
+
+/** Оригинальное ядро Xray-core (Go), собранное в libtytxray.so. Имена методов совпадают с JNI-функциями в xraycore/libtyt/jni_shim.c. */
+object XrayNative {
+    val loaded: Boolean = try { System.loadLibrary("tytxray"); true } catch (_: Throwable) { false }
+
+    @JvmStatic external fun start(config: String, port: Int): String
+    @JvmStatic external fun stop()
+    @JvmStatic external fun port(): Int
+    @JvmStatic external fun log(): String
+}

@@ -513,7 +513,7 @@ class ProxyPanel(
             setPadding(ctx.dp(16), ctx.dp(8), ctx.dp(16), ctx.dp(8))
             setOnClickListener { showLog() }
         })
-        col.addView(ctx.text("Поддерживаются транспорты tcp и ws, защита TLS (REALITY ядро не умеет), flow для VLESS. Остальные ссылки будут пропущены.", 11f, pal.muted).apply {
+        col.addView(ctx.text("Оригинальное ядро Xray-core: VLESS, VMess, Trojan, SS; tcp, ws, grpc, httpupgrade, xhttp; TLS и REALITY; flow (Vision). Остальные ссылки пропускаются.", 11f, pal.muted).apply {
             setPadding(ctx.dp(16), ctx.dp(8), ctx.dp(16), 0)
         })
     }

@@ -76,6 +76,18 @@ val cargoNdk = tasks.register<Exec>("cargoNdk") {
         "build", "--release",
     )
 }
+// ── Xray-core (Go) ─────────────────────────────────────────────────────────
+// scripts/build-xray.sh собирает libtytxray.so (оригинальное ядро Xray) под все ABI.
+val goXray = tasks.register<Exec>("goXray") {
+    group = "build"
+    description = "Собирает libtytxray.so из xraycore/ через Go + NDK"
+    workingDir = rootProject.projectDir
+    commandLine("bash", "scripts/build-xray.sh")
+}
+if (!project.hasProperty("skipGo")) {
+    tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(goXray) }
+}
+
 if (!project.hasProperty("skipRust")) {
     tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(cargoNdk) }
 }
