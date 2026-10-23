@@ -128,16 +128,7 @@ fn stream_json(s: &Stream, fallback_sni: &str) -> Result<String, String> {
             o.push('}');
         }
         "reality" => {
-            if s.pbk.is_empty() {
-                return Err("для REALITY нужен параметр pbk (публичный ключ)".into());
-            }
-            o.push_str(",\"security\":\"reality\",\"realitySettings\":{\"serverNames\":[");
-            o.push_str(&json::string(sni));
-            o.push_str(&format!("],\"publicKey\":{},\"shortIds\":[{}]", json::string(s.pbk), json::string(s.sid)));
-            if !s.spx.is_empty() {
-                o.push_str(&format!(",\"spiderX\":{}", json::string(s.spx)));
-            }
-            o.push('}');
+            return Err("REALITY не поддерживается встроенным ядром xray-rs (клиентская часть не реализована)".into());
         }
         "" | "none" => {}
         other => return Err(format!("тип защиты «{}» не поддерживается", other)),
@@ -193,8 +184,9 @@ fn parse_vless_trojan(scheme: &str, rest: &str) -> Result<ProxyLink, String> {
             return Err("UUID должен содержать 36 символов".into());
         }
         format!(
-            "{{\"vnext\":[{{\"address\":{},\"port\":{},\"users\":[{{\"id\":{}}}]}}]}}",
-            json::string(&host), port, json::string(&cred)
+            "{{\"vnext\":[{{\"address\":{},\"port\":{},\"users\":[{{\"id\":{}{}}}]}}]}}",
+            json::string(&host), port, json::string(&cred),
+            if q(&p, "flow").is_empty() { String::new() } else { format!(",\"flow\":{}", json::string(q(&p, "flow"))) }
         )
     } else {
         format!(
@@ -352,14 +344,13 @@ mod tests {
     const U: &str = "11111111-2222-3333-4444-555555555555";
 
     #[test]
-    fn vless_reality() {
-        let l = format!("vless://{}@1.2.3.4:443?type=tcp&security=reality&sni=ex.com&pbk=KEY&sid=ab&fp=chrome&flow=xtls-rprx-vision#My%20Node", U);
+    fn vless_reality_rejected_and_flow_kept() {
+        let l = format!("vless://{}@1.2.3.4:443?type=tcp&security=reality&sni=ex.com&pbk=KEY&sid=ab", U);
+        assert!(parse(&l).unwrap_err().contains("REALITY"));
+        let l = format!("vless://{}@1.2.3.4:443?security=tls&flow=xtls-rprx-vision#My%20Node", U);
         let p = parse(&l).unwrap();
         assert_eq!(p.name, "My Node");
-        assert_eq!((p.host.as_str(), p.port), ("1.2.3.4", 443));
-        assert!(p.outbound.contains("\"publicKey\":\"KEY\""));
-        assert!(p.outbound.contains("\"shortIds\":[\"ab\"]"));
-        assert!(p.outbound.contains(U));
+        assert!(p.outbound.contains("\"flow\":\"xtls-rprx-vision\""));
     }
 
     #[test]
@@ -369,12 +360,6 @@ mod tests {
         assert!(p.outbound.contains("\"path\":\"/ws\""));
         assert!(p.outbound.contains("\"serverName\":\"s.x\""));
         assert!(p.outbound.contains("\"host\":\"cdn.x\""));
-    }
-
-    #[test]
-    fn reality_needs_key() {
-        let l = format!("vless://{}@h:443?security=reality&sni=a", U);
-        assert!(parse(&l).is_err());
     }
 
     #[test]
