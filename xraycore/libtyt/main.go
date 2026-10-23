@@ -18,7 +18,7 @@ import (
 	_ "github.com/xtls/xray-core/main/distro/all"
 )
 
-const logCap = 64 * 1024
+const logCap = 256 * 1024
 
 var (
 	mu      sync.Mutex
@@ -31,7 +31,14 @@ var (
 // ringHandler складывает сообщения ядра в буфер ограниченного размера.
 type ringHandler struct{}
 
-func (ringHandler) Handle(msg log.Message) { appendLog(msg.String()) }
+func (ringHandler) Handle(msg log.Message) {
+	text := msg.String()
+	// Отладочный шум и проба готовности порта не нужны: оставляем Info и выше.
+	if strings.Contains(text, "[Debug]") || strings.Contains(text, "failed to read http request > EOF") {
+		return
+	}
+	appendLog(text)
+}
 
 func appendLog(s string) {
 	logLock.Lock()
