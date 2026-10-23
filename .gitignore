@@ -12,3 +12,4 @@ core/target/
 core/Cargo.lock.bak
 # Собираемые нативные библиотеки (генерируются cargo-ndk)
 app/src/main/jniLibs/
+!app/debug.keystore
