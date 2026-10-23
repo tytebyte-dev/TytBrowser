@@ -249,6 +249,9 @@ pub struct UserConfig {
     pub password: Option<String>,
     #[serde(default)]
     pub level: Option<u32>,
+    /// Режим потока VLESS (например `xtls-rprx-vision`).
+    #[serde(default)]
+    pub flow: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -471,6 +474,9 @@ impl Config {
                     let mut client = p::vless::OutboundClient::new(
                         &tag, dest, user_uuid, tls_client, tls_sni, ws_path, ws_host,
                     );
+                    if let Some(flow) = user.flow.as_deref().filter(|f| !f.trim().is_empty()) {
+                        client = client.with_flow(flow.trim());
+                    }
                     if let Some(f_cfg) = fragment_cfg {
                         client = client.with_fragment(f_cfg);
                     }
