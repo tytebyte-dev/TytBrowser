@@ -225,8 +225,9 @@ fn parse_vless_trojan(scheme: &str, rest: &str) -> Result<ProxyLink, String> {
             return Err("UUID должен содержать 36 символов".into());
         }
         format!(
-            "{{\"vnext\":[{{\"address\":{},\"port\":{},\"users\":[{{\"id\":{},\"encryption\":\"none\"{}}}]}}]}}",
+            "{{\"vnext\":[{{\"address\":{},\"port\":{},\"users\":[{{\"id\":{},\"encryption\":{}{}}}]}}]}}",
             json::string(&host), port, json::string(&cred),
+            json::string(if q(&p, "encryption").is_empty() { "none" } else { q(&p, "encryption") }),
             if q(&p, "flow").is_empty() { String::new() } else { format!(",\"flow\":{}", json::string(q(&p, "flow"))) }
         )
     } else {
@@ -399,6 +400,14 @@ mod tests {
         let p = parse(&l).unwrap();
         assert_eq!(p.name, "My Node");
         assert!(p.outbound.contains("\"flow\":\"xtls-rprx-vision\""));
+    }
+
+    #[test]
+    fn vless_encryption_passthrough() {
+        let l = format!("vless://{}@1.2.3.4:8080?encryption=mlkem768x25519plus.native.0rtt.KEY&security=none", U);
+        assert!(parse(&l).unwrap().outbound.contains("\"encryption\":\"mlkem768x25519plus.native.0rtt.KEY\""));
+        let l = format!("vless://{}@1.2.3.4:8080?security=none", U);
+        assert!(parse(&l).unwrap().outbound.contains("\"encryption\":\"none\""));
     }
 
     #[test]
