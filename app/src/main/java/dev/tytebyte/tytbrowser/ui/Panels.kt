@@ -509,9 +509,29 @@ class ProxyPanel(
             setPadding(ctx.dp(16), ctx.dp(16), ctx.dp(16), ctx.dp(8))
             setOnClickListener { importClipboard() }
         })
+        col.addView(ctx.text("Журнал прокси", 14f, pal.accent, true).apply {
+            setPadding(ctx.dp(16), ctx.dp(8), ctx.dp(16), ctx.dp(8))
+            setOnClickListener { showLog() }
+        })
         col.addView(ctx.text("Поддерживаются транспорты tcp и ws, защита TLS и REALITY. Остальные ссылки будут пропущены.", 11f, pal.muted).apply {
             setPadding(ctx.dp(16), ctx.dp(8), ctx.dp(16), 0)
         })
+    }
+
+    private fun showLog() {
+        val log = Core.proxyLog().ifBlank { "Журнал пуст: прокси ещё не запускался." }
+        val tv = ctx.text(log.takeLast(12000), 10f, pal.text).apply {
+            typeface = android.graphics.Typeface.MONOSPACE
+            setTextIsSelectable(true)
+            setPadding(ctx.dp(16), ctx.dp(8), ctx.dp(16), ctx.dp(8))
+        }
+        AlertDialog.Builder(ctx).setTitle("Журнал прокси").setView(ScrollView(ctx).apply { addView(tv) })
+            .setNegativeButton("Закрыть", null)
+            .setPositiveButton("Копировать") { _, _ ->
+                val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("proxy log", log))
+                Toast.makeText(ctx, "Скопировано", Toast.LENGTH_SHORT).show()
+            }.show()
     }
 
     private fun importClipboard() {

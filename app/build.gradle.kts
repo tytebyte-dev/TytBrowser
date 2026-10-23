@@ -20,7 +20,15 @@ android {
     buildFeatures { buildConfig = true }
 
     signingConfigs {
-        // Подпись релиза берётся из переменных окружения (CI) — иначе APK собирается с debug-ключом.
+        // Постоянный отладочный ключ из репозитория: APK с любой машины и из CI подписан одинаково,
+        // поэтому приложение можно ставить поверх предыдущей версии без удаления.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "tytdebug"
+            keyPassword = "android"
+        }
+        // Подпись релиза берётся из переменных окружения (CI) — иначе используется постоянный debug-ключ (app/debug.keystore).
         val ks = System.getenv("TYT_KEYSTORE")
         if (ks != null) {
             create("release") {

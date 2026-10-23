@@ -75,3 +75,7 @@ GitHub Actions (`.github/workflows/build.yml`) прогоняет тесты Rus
 
 `core/third_party/xray-rs` — порт Xray-core на Rust (лицензия MIT OR Apache-2.0, см. `core/third_party/xray-rs/LICENSE`),
 взят без изменений исходников, кроме манифеста (убраны исполняемые цели). Проект Stygian (AGPL-3.0) не включён из-за несовместимости лицензий.
+
+## Подпись
+
+Сборки без своего ключа подписываются постоянным отладочным ключом `app/debug.keystore` (пароль `android`, алиас `tytdebug`). Он публичный и предназначен только для разработки: APK с него обновляются поверх друг друга. Для своего релиза задайте `TYT_KEYSTORE`, `TYT_KEYSTORE_PASSWORD`, `TYT_KEY_ALIAS`, `TYT_KEY_PASSWORD`.
