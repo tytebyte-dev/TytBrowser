@@ -20,6 +20,7 @@ env:
   ANDROID_API: "34"
   BUILD_TOOLS: "34.0.0"
   GRADLE_VERSION: "8.9"
+  JAVA_VERSION: "17"
   # Если нужно принудительно сбросить все слои — поменяйте это число.
   CACHE_SALT: "v1"
   # Путь SDK на образах GitHub (нужен в контексте env для ключей кэша).
@@ -46,16 +47,160 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-java@v5
+      # ───────────── Слой JDK ─────────────
+      # restore → проверка → (если слоя нет или он битый) установка с нуля → сохранение
+      - name: "Layer JDK: restore"
+        id: jdk-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.TOOLS_DIR }}/jdk
+          key: jdk-${{ runner.os }}-temurin${{ env.JAVA_VERSION }}-${{ env.CACHE_SALT }}
+
+      - name: "Layer JDK: verify"
+        id: jdk-verify
+        run: |
+          if "$TOOLS_DIR/jdk/bin/java" -version 2>&1 | grep -q "version \"$JAVA_VERSION\."; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            if [ "${{ steps.jdk-cache.outputs.cache-hit }}" = "true" ]; then
+              echo "::warning::JDK cache was restored but is broken — installing from scratch"
+            fi
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "Layer JDK: install from scratch"
+        if: steps.jdk-verify.outputs.ok != 'true'
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: ${{ env.JAVA_VERSION }}
 
-      # Оригинальное ядро Xray-core (Go). Версия берётся из xraycore/go.mod; модули и сборочный кэш — по go.sum.
-      - uses: actions/setup-go@v6
+      - name: "Layer JDK: activate"
+        id: jdk
+        run: |
+          if [ "${{ steps.jdk-verify.outputs.ok }}" = "true" ]; then
+            state="restored from cache, verified"
+          else
+            rm -rf "$TOOLS_DIR/jdk"
+            mkdir -p "$TOOLS_DIR"
+            cp -a "$JAVA_HOME" "$TOOLS_DIR/jdk"
+            state="installed from scratch"
+          fi
+          "$TOOLS_DIR/jdk/bin/java" -version 2>&1 | grep -q "version \"$JAVA_VERSION\." \
+            || { echo "::error::JDK layer is invalid after install"; exit 1; }
+          echo "JAVA_HOME=$TOOLS_DIR/jdk" >> "$GITHUB_ENV"
+          echo "$TOOLS_DIR/jdk/bin" >> "$GITHUB_PATH"
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+
+      - name: "Layer JDK: save"
+        if: steps.jdk.outputs.state == 'installed from scratch'
+        uses: actions/cache/save@v5
         with:
-          go-version-file: xraycore/go.mod
-          cache-dependency-path: xraycore/go.sum
+          path: ${{ env.TOOLS_DIR }}/jdk
+          key: jdk-${{ runner.os }}-temurin${{ env.JAVA_VERSION }}-${{ env.CACHE_SALT }}
+
+      # ───────────── Слой Go: компилятор ─────────────
+      - name: Read Go version from xraycore/go.mod
+        id: gover
+        run: echo "v=$(awk '/^go /{print $2; exit}' xraycore/go.mod)" >> "$GITHUB_OUTPUT"
+
+      - name: "Layer Go toolchain: restore"
+        id: go-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.TOOLS_DIR }}/go
+          key: go-toolchain-${{ runner.os }}-${{ steps.gover.outputs.v }}-${{ env.CACHE_SALT }}
+
+      - name: "Layer Go toolchain: verify"
+        id: go-verify
+        run: |
+          if "$TOOLS_DIR/go/bin/go" version 2>&1 | grep -q "go${{ steps.gover.outputs.v }}"; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            if [ "${{ steps.go-cache.outputs.cache-hit }}" = "true" ]; then
+              echo "::warning::Go toolchain cache was restored but is broken — installing from scratch"
+            fi
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "Layer Go toolchain: install from scratch"
+        if: steps.go-verify.outputs.ok != 'true'
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ steps.gover.outputs.v }}
+          cache: false
+
+      - name: "Layer Go toolchain: activate"
+        id: go-tool
+        run: |
+          if [ "${{ steps.go-verify.outputs.ok }}" = "true" ]; then
+            state="restored from cache, verified"
+          else
+            rm -rf "$TOOLS_DIR/go"
+            mkdir -p "$TOOLS_DIR"
+            cp -a "$(go env GOROOT)" "$TOOLS_DIR/go"
+            state="installed from scratch"
+          fi
+          "$TOOLS_DIR/go/bin/go" version | grep -q "go${{ steps.gover.outputs.v }}" \
+            || { echo "::error::Go toolchain layer is invalid after install"; exit 1; }
+          echo "GOROOT=$TOOLS_DIR/go" >> "$GITHUB_ENV"
+          echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
+          echo "$TOOLS_DIR/go/bin" >> "$GITHUB_PATH"
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+
+      - name: "Layer Go toolchain: save"
+        if: steps.go-tool.outputs.state == 'installed from scratch'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ env.TOOLS_DIR }}/go
+          key: go-toolchain-${{ runner.os }}-${{ steps.gover.outputs.v }}-${{ env.CACHE_SALT }}
+
+      # ───────────── Слой Go: модули Xray-core ─────────────
+      - name: "Layer Go modules: restore"
+        id: gomod-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.TOOLS_DIR }}/gomod
+          key: go-mod-${{ runner.os }}-${{ steps.gover.outputs.v }}-${{ hashFiles('xraycore/go.sum') }}-${{ env.CACHE_SALT }}
+
+      - name: "Layer Go modules: verify or download"
+        id: gomod
+        working-directory: xraycore
+        run: |
+          export GOMODCACHE="$TOOLS_DIR/gomod"
+          if go mod verify > /dev/null 2>&1; then
+            state="restored from cache, verified"
+          else
+            if [ "${{ steps.gomod-cache.outputs.cache-hit }}" = "true" ]; then
+              echo "::warning::Go modules cache was restored but is broken — downloading from scratch"
+            fi
+            chmod -R u+w "$GOMODCACHE" 2>/dev/null || true
+            rm -rf "$GOMODCACHE"
+            go mod download
+            state="installed from scratch"
+          fi
+          go mod verify    # слой обязан быть целым, иначе падаем здесь
+          echo "GOMODCACHE=$GOMODCACHE" >> "$GITHUB_ENV"
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+
+      - name: "Layer Go modules: save"
+        if: steps.gomod.outputs.state == 'installed from scratch'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ env.TOOLS_DIR }}/gomod
+          key: go-mod-${{ runner.os }}-${{ steps.gover.outputs.v }}-${{ hashFiles('xraycore/go.sum') }}-${{ env.CACHE_SALT }}
+
+      # Сборочный кэш Go: содержимое адресуется по хэшам, повреждённые записи Go пересобирает сам.
+      - name: "Go build cache"
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.TOOLS_DIR }}/gobuild
+          key: go-build-${{ runner.os }}-${{ steps.gover.outputs.v }}-${{ hashFiles('xraycore/**/*.go') }}-${{ env.CACHE_SALT }}
+          restore-keys: |
+            go-build-${{ runner.os }}-${{ steps.gover.outputs.v }}-
+
+      - name: Point Go build cache to the layer
+        run: echo "GOCACHE=$TOOLS_DIR/gobuild" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -160,7 +305,10 @@ jobs:
             echo "|---|---|"
             echo "| cargo-ndk ${CARGO_NDK_VERSION} | ${{ steps.ndk-tool.outputs.state }} |"
             echo "| Android SDK (NDK ${NDK_VERSION}, API ${ANDROID_API}, build-tools ${BUILD_TOOLS}) | ${{ steps.sdk.outputs.state }} |"
-            echo "| Gradle / Rust target | см. отчёты setup-gradle и rust-cache |"
+            echo "| JDK ${JAVA_VERSION} | ${{ steps.jdk.outputs.state }} |"
+            echo "| Go ${{ steps.gover.outputs.v }} (компилятор) | ${{ steps.go-tool.outputs.state }} |"
+            echo "| Go-модули Xray-core | ${{ steps.gomod.outputs.state }} |"
+            echo "| Gradle / Rust target / Go build | см. отчёты setup-gradle, rust-cache и actions/cache |"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build release APK (Rust + Kotlin)
