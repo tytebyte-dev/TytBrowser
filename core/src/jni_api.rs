@@ -152,18 +152,40 @@ pub extern "system" fn Java_dev_tytebyte_tytbrowser_core_NativeCore_proxyParse<'
     ret(&mut env, &out)
 }
 
-/// Конфигурация Xray для ссылки и локального порта. При ошибке строка начинается с «!».
+/// Конфигурация Xray для цепочки ссылок (по одной в строке, от входа к выходу) и правил маршрутизации.
+/// При ошибке строка начинается с «!».
 #[no_mangle]
 pub extern "system" fn Java_dev_tytebyte_tytbrowser_core_NativeCore_proxyConfig<'l>(
     mut env: JNIEnv<'l>,
     _class: JClass<'l>,
-    link: JString<'l>,
+    links: JString<'l>,
+    rules: JString<'l>,
+    default_action: JString<'l>,
     port: jint,
 ) -> jstring {
-    let link = get(&mut env, &link);
+    let links = get(&mut env, &links);
+    let rules = get(&mut env, &rules);
+    let default_action = get(&mut env, &default_action);
     let out = guard("!внутренняя ошибка ядра".to_string(), || match u16::try_from(port) {
-        Ok(p) if p > 0 => crate::proxylink::build_config(&link, p).unwrap_or_else(|e| format!("!{e}")),
+        Ok(p) if p > 0 => {
+            let list: Vec<&str> = links.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+            crate::proxylink::build_chain_config(&list, &rules, &default_action, p).unwrap_or_else(|e| format!("!{e}"))
+        }
         _ => "!некорректный порт".to_string(),
     });
     ret(&mut env, &out)
+}
+
+/// Какие базы geo нужны правилам: бит 0 — geoip.dat, бит 1 — geosite.dat.
+#[no_mangle]
+pub extern "system" fn Java_dev_tytebyte_tytbrowser_core_NativeCore_proxyNeedGeo<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    rules: JString<'l>,
+) -> jint {
+    let rules = get(&mut env, &rules);
+    guard(0, || {
+        let (ip, site) = crate::proxylink::rules_need_geo(&rules);
+        (ip as jint) | ((site as jint) << 1)
+    })
 }

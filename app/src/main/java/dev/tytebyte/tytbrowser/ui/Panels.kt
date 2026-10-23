@@ -18,9 +18,13 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Toast
 import dev.tytebyte.tytbrowser.BuildConfig
+import dev.tytebyte.tytbrowser.GeoData
 import dev.tytebyte.tytbrowser.core.Core
 import dev.tytebyte.tytbrowser.data.Db
 import dev.tytebyte.tytbrowser.data.Prefs
+import dev.tytebyte.tytbrowser.data.RouteAction
+import dev.tytebyte.tytbrowser.data.RouteRule
+import dev.tytebyte.tytbrowser.data.RouteRules
 
 /** Полноэкранный раздел поверх браузера: шапка со стрелкой «назад», заголовком и действиями. */
 open class Panel(protected val ctx: Context, protected val pal: Pal, title: String, private val close: () -> Unit) {
@@ -424,6 +428,7 @@ class SettingsPanel(
 class ProxyPanel(
     ctx: Context, pal: Pal, private val prefs: Prefs,
     private val onApply: () -> Unit,
+    private val onRules: () -> Unit,
     close: () -> Unit,
 ) : Panel(ctx, pal, "Прокси", close) {
 
@@ -460,7 +465,7 @@ class ProxyPanel(
         ).apply { setPadding(0, ctx.dp(3), 0, 0) })
         row.addView(txt); row.addView(sw)
         sw.setOnCheckedChangeListener { _, v ->
-            if (v && prefs.proxyActiveLink.isEmpty()) {
+            if (v && dev.tytebyte.tytbrowser.ProxyManager.activeLinks(prefs).isEmpty()) {
                 sw.isChecked = false
                 Toast.makeText(ctx, "Сначала добавьте и выберите профиль", Toast.LENGTH_SHORT).show()
             } else {
@@ -478,7 +483,7 @@ class ProxyPanel(
             })
         }
         profiles.forEach { p ->
-            val on = p.link == active
+            val on = p.link == active && !prefs.proxyUseChain
             col.addView(LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -491,6 +496,7 @@ class ProxyPanel(
                 if (on) addView(ctx.text("✓", 18f, pal.accent))
                 setOnClickListener {
                     prefs.proxyActiveLink = p.link
+                    prefs.proxyUseChain = false
                     if (prefs.proxyEnabled) onApply()
                     render()
                 }
@@ -509,6 +515,30 @@ class ProxyPanel(
             setPadding(ctx.dp(16), ctx.dp(16), ctx.dp(16), ctx.dp(8))
             setOnClickListener { importClipboard() }
         })
+        col.addView(ctx.text("ЦЕПОЧКА И МАРШРУТЫ", 11f, pal.accent, true).apply { setPadding(ctx.dp(16), ctx.dp(16), ctx.dp(16), ctx.dp(6)) })
+        val chainLinks = prefs.proxyChain.lines().filter { it.isNotBlank() }
+        val byLink = profiles.associateBy { it.link }
+        val chainText = if (chainLinks.isEmpty()) "не задана"
+        else chainLinks.joinToString(" → ") { byLink[it]?.name ?: "?" }
+        col.addView(LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(ctx.dp(16), ctx.dp(12), ctx.dp(16), ctx.dp(12))
+            background = ripple(pal.ripple, null)
+            addView(ctx.text("Цепочка прокси" + if (prefs.proxyUseChain && chainLinks.isNotEmpty()) "  ✓" else "", 15f,
+                if (prefs.proxyUseChain && chainLinks.isNotEmpty()) pal.accent else pal.text))
+            addView(ctx.text(chainText, 11f, pal.muted).apply { setPadding(0, ctx.dp(3), 0, 0) })
+            setOnClickListener { chainMenu(profiles, chainLinks) }
+        })
+        col.addView(LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(ctx.dp(16), ctx.dp(12), ctx.dp(16), ctx.dp(12))
+            background = ripple(pal.ripple, null)
+            val n = RouteRules.decode(prefs.proxyRules).count { it.enabled }
+            addView(ctx.text("Правила маршрутизации", 15f, pal.text))
+            addView(ctx.text("Включено правил: $n · по умолчанию ${if (prefs.proxyDefaultDirect) "напрямую" else "через прокси"}", 11f, pal.muted)
+                .apply { setPadding(0, ctx.dp(3), 0, 0) })
+            setOnClickListener { onRules() }
+        })
         col.addView(ctx.text("Журнал прокси", 14f, pal.accent, true).apply {
             setPadding(ctx.dp(16), ctx.dp(8), ctx.dp(16), ctx.dp(8))
             setOnClickListener { showLog() }
@@ -516,6 +546,55 @@ class ProxyPanel(
         col.addView(ctx.text("Оригинальное ядро Xray-core: VLESS, VMess, Trojan, SS; tcp, ws, grpc, httpupgrade, xhttp; TLS и REALITY; flow (Vision). Остальные ссылки пропускаются.", 11f, pal.muted).apply {
             setPadding(ctx.dp(16), ctx.dp(8), ctx.dp(16), 0)
         })
+    }
+
+    private fun chainMenu(profiles: List<dev.tytebyte.tytbrowser.core.ProxyProfile>, chainLinks: List<String>) {
+        val usable = chainLinks.isNotEmpty()
+        val items = mutableListOf("Изменить звенья")
+        if (usable) items.add(0, if (prefs.proxyUseChain) "Не использовать цепочку" else "Использовать цепочку")
+        if (usable) items.add("Очистить")
+        AlertDialog.Builder(ctx).setTitle("Цепочка прокси")
+            .setItems(items.toTypedArray()) { _, w ->
+                when (items[w]) {
+                    "Использовать цепочку" -> { prefs.proxyUseChain = true; if (prefs.proxyEnabled) onApply(); render() }
+                    "Не использовать цепочку" -> { prefs.proxyUseChain = false; if (prefs.proxyEnabled) onApply(); render() }
+                    "Изменить звенья" -> editChain(profiles, chainLinks)
+                    "Очистить" -> {
+                        prefs.proxyChain = ""; prefs.proxyUseChain = false
+                        if (prefs.proxyEnabled) onApply()
+                        render()
+                    }
+                }
+            }.show()
+    }
+
+    /** Звенья выбираются по порядку нажатия: первое — вход (ближе к вам), последнее — выход в интернет. */
+    private fun editChain(profiles: List<dev.tytebyte.tytbrowser.core.ProxyProfile>, current: List<String>) {
+        if (profiles.size < 2) {
+            Toast.makeText(ctx, "Для цепочки нужно минимум два профиля", Toast.LENGTH_LONG).show()
+            return
+        }
+        val order = current.filter { l -> profiles.any { it.link == l } }.toMutableList()
+        fun labels() = profiles.map { it.name }.toTypedArray()
+        val checked = BooleanArray(profiles.size) { profiles[it].link in order }
+        lateinit var dialog: AlertDialog
+        dialog = AlertDialog.Builder(ctx).setTitle("Звенья по порядку: вход → выход")
+            .setMultiChoiceItems(labels(), checked) { _, w, on ->
+                val l = profiles[w].link
+                if (on) { if (l !in order) order.add(l) } else order.remove(l)
+                dialog.setTitle("Звенья: " + if (order.isEmpty()) "ничего не выбрано" else order.joinToString(" → ") { o -> profiles.first { it.link == o }.name })
+            }
+            .setNegativeButton("Отмена", null)
+            .setPositiveButton("Сохранить") { _, _ ->
+                if (order.size < 2) {
+                    Toast.makeText(ctx, "Выберите минимум два звена", Toast.LENGTH_LONG).show()
+                } else {
+                    prefs.proxyChain = order.joinToString("\n")
+                    prefs.proxyUseChain = true
+                    if (prefs.proxyEnabled) onApply()
+                    render()
+                }
+            }.show()
     }
 
     private fun showLog() {
@@ -549,5 +628,168 @@ class ProxyPanel(
         if (prefs.proxyActiveLink.isEmpty()) prefs.proxyActiveLink = found.first().link
         Toast.makeText(ctx, "Добавлено профилей: $added", Toast.LENGTH_SHORT).show()
         render()
+    }
+}
+
+/** Правила маршрутизации: domain/full/keyword/regexp/geosite, IP/CIDR/geoip, порты, сеть; базы geo. */
+class RulesPanel(
+    ctx: Context, pal: Pal, private val prefs: Prefs,
+    private val onApply: () -> Unit,
+    close: () -> Unit,
+) : Panel(ctx, pal, "Правила маршрутизации", close) {
+
+    private val col = LinearLayout(ctx).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(0, 0, 0, ctx.dp(24))
+    }
+
+    init {
+        body.addView(scroll(col), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        render()
+    }
+
+    private fun rules() = RouteRules.decode(prefs.proxyRules)
+
+    private fun save(list: List<RouteRule>) {
+        prefs.proxyRules = RouteRules.encode(list)
+        if (prefs.proxyEnabled) onApply()
+        render()
+    }
+
+    private fun render() {
+        col.removeAllViews()
+        val list = rules()
+
+        col.addView(row("По умолчанию — напрямую", "Трафик, не подошедший ни под одно правило. Выключено: через прокси.",
+            android.widget.Switch(ctx).apply {
+                isChecked = prefs.proxyDefaultDirect
+                setOnCheckedChangeListener { _, v -> prefs.proxyDefaultDirect = v; if (prefs.proxyEnabled) onApply(); render() }
+            }))
+
+        col.addView(ctx.text("ПРАВИЛА (сверху вниз, срабатывает первое)", 11f, pal.accent, true).apply {
+            setPadding(ctx.dp(16), ctx.dp(16), ctx.dp(16), ctx.dp(6))
+        })
+        if (list.isEmpty()) {
+            col.addView(ctx.text("Правил нет: весь трафик идёт по умолчанию. Добавьте своё или возьмите шаблон.", 13f, pal.muted).apply {
+                setPadding(ctx.dp(16), ctx.dp(6), ctx.dp(16), ctx.dp(10))
+            })
+        }
+        list.forEachIndexed { i, r ->
+            col.addView(row("${r.name.ifBlank { "Правило ${i + 1}" }} → ${r.action.title}", r.summary,
+                android.widget.Switch(ctx).apply {
+                    isChecked = r.enabled
+                    setOnCheckedChangeListener { _, v -> save(list.toMutableList().also { it[i] = r.copy(enabled = v) }) }
+                }).apply {
+                setOnClickListener { edit(i, r) }
+                setOnLongClickListener {
+                    AlertDialog.Builder(ctx).setTitle(r.name)
+                        .setItems(arrayOf("Выше", "Ниже", "Удалить")) { _, w ->
+                            val m = list.toMutableList()
+                            when (w) {
+                                0 -> if (i > 0) { m.removeAt(i); m.add(i - 1, r) }
+                                1 -> if (i < m.lastIndex) { m.removeAt(i); m.add(i + 1, r) }
+                                else -> m.removeAt(i)
+                            }
+                            save(m)
+                        }.show()
+                    true
+                }
+            })
+        }
+        col.addView(ctx.text("+ Добавить правило", 14f, pal.accent, true).apply {
+            setPadding(ctx.dp(16), ctx.dp(14), ctx.dp(16), ctx.dp(6))
+            setOnClickListener { edit(-1, RouteRule("")) }
+        })
+        col.addView(ctx.text("+ Шаблоны (локальные сети, Россия, реклама)", 14f, pal.accent, true).apply {
+            setPadding(ctx.dp(16), ctx.dp(10), ctx.dp(16), ctx.dp(6))
+            setOnClickListener { presets() }
+        })
+
+        col.addView(ctx.text("БАЗЫ GEO", 11f, pal.accent, true).apply { setPadding(ctx.dp(16), ctx.dp(20), ctx.dp(16), ctx.dp(6)) })
+        col.addView(ctx.text("geoip.dat и geosite.dat: ${GeoData.status(ctx)}", 13f, pal.text).apply { setPadding(ctx.dp(16), ctx.dp(4), ctx.dp(16), ctx.dp(4)) })
+        col.addView(ctx.text("Нужны для правил geoip: и geosite:. Скачиваются напрямую, не через прокси.", 11f, pal.muted).apply {
+            setPadding(ctx.dp(16), 0, ctx.dp(16), ctx.dp(6))
+        })
+        col.addView(ctx.text("Скачать / обновить базы", 14f, pal.accent, true).apply {
+            setPadding(ctx.dp(16), ctx.dp(8), ctx.dp(16), ctx.dp(6))
+            setOnClickListener {
+                text = "Загрузка…"
+                GeoData.update(ctx) { err ->
+                    Toast.makeText(ctx, if (err == null) "Базы обновлены" else "Не удалось: $err", Toast.LENGTH_LONG).show()
+                    if (err == null && prefs.proxyEnabled) onApply()
+                    render()
+                }
+            }
+        })
+        col.addView(ctx.text("Формат: домен — example.com (с поддоменами), full:, keyword:, regexp:, geosite:ru; IP — 1.2.3.0/24, geoip:ru; порты — 80,443,1000-2000.", 11f, pal.muted).apply {
+            setPadding(ctx.dp(16), ctx.dp(16), ctx.dp(16), 0)
+        })
+    }
+
+    private fun row(title: String, hint: String, trailing: View): LinearLayout = LinearLayout(ctx).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(ctx.dp(16), ctx.dp(11), ctx.dp(16), ctx.dp(11))
+        background = ripple(pal.ripple, null)
+        val t = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; layoutParams = weighted().apply { marginEnd = ctx.dp(12) } }
+        t.addView(ctx.text(title, 15f, pal.text))
+        t.addView(ctx.text(hint, 11f, pal.muted).apply { setPadding(0, ctx.dp(3), 0, 0); maxLines = 2; ellipsize = TextUtils.TruncateAt.END })
+        addView(t); addView(trailing)
+    }
+
+    private fun presets() {
+        val ps = RouteRules.presets
+        val sel = BooleanArray(ps.size)
+        AlertDialog.Builder(ctx).setTitle("Шаблоны правил")
+            .setMultiChoiceItems(ps.map { it.name }.toTypedArray(), sel) { _, w, on -> sel[w] = on }
+            .setNegativeButton("Отмена", null)
+            .setPositiveButton("Добавить") { _, _ ->
+                val add = ps.filterIndexed { i, _ -> sel[i] }
+                if (add.isNotEmpty()) {
+                    save(rules() + add)
+                    if (!GeoData.hasAll(ctx)) Toast.makeText(ctx, "Скачайте базы geo, иначе прокси не запустится", Toast.LENGTH_LONG).show()
+                }
+            }.show()
+    }
+
+    private fun edit(index: Int, r: RouteRule) {
+        val box = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; setPadding(ctx.dp(20), ctx.dp(8), ctx.dp(20), 0) }
+        fun field(hint: String, value: String, multi: Boolean) = EditText(ctx).apply {
+            this.hint = hint; setText(value)
+            if (multi) { isSingleLine = false; minLines = 2; maxLines = 6 } else isSingleLine = true
+            box.addView(this)
+        }
+        val name = field("Название", r.name, false)
+        val domains = field("Домены (по одному в строке)", r.domains, true)
+        val ips = field("IP / CIDR / geoip:xx (по одному в строке)", r.ips, true)
+        val ports = field("Порты, например 80,443,1000-2000", r.ports, false)
+        val nets = arrayOf("Любая сеть", "TCP", "UDP")
+        val net = android.widget.Spinner(ctx).apply {
+            adapter = android.widget.ArrayAdapter(ctx, android.R.layout.simple_spinner_dropdown_item, nets)
+            setSelection(when (r.network) { "tcp" -> 1; "udp" -> 2; else -> 0 })
+        }
+        val acts = RouteAction.entries
+        val act = android.widget.Spinner(ctx).apply {
+            adapter = android.widget.ArrayAdapter(ctx, android.R.layout.simple_spinner_dropdown_item, acts.map { it.title })
+            setSelection(acts.indexOf(r.action))
+        }
+        box.addView(net); box.addView(act)
+        AlertDialog.Builder(ctx).setTitle(if (index < 0) "Новое правило" else "Правило")
+            .setView(ScrollView(ctx).apply { addView(box) })
+            .setNegativeButton("Отмена", null)
+            .setPositiveButton("Сохранить") { _, _ ->
+                val nr = RouteRule(
+                    name.text.toString().trim(), r.enabled || index < 0, acts[act.selectedItemPosition],
+                    domains.text.toString().trim(), ips.text.toString().trim(), ports.text.toString().trim(),
+                    arrayOf("", "tcp", "udp")[net.selectedItemPosition],
+                )
+                if (nr.domains.isEmpty() && nr.ips.isEmpty() && nr.ports.isEmpty() && nr.network.isEmpty()) {
+                    Toast.makeText(ctx, "Укажите хотя бы одно условие", Toast.LENGTH_LONG).show()
+                } else {
+                    val m = rules().toMutableList()
+                    if (index < 0) m.add(nr) else m[index] = nr
+                    save(m)
+                }
+            }.show()
     }
 }

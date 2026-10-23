@@ -101,9 +101,30 @@ class Prefs(ctx: Context) {
         get() = sp.getString("proxy_links", "") ?: ""
         set(v) = sp.edit().putString("proxy_links", v).apply()
 
+    /** Цепочка прокси: ссылки звеньев по одной в строке (от входа к выходу) и признак «использовать цепочку». */
+    var proxyChain: String
+        get() = sp.getString("proxy_chain", "") ?: ""
+        set(v) = sp.edit().putString("proxy_chain", v).apply()
+
+    var proxyUseChain: Boolean
+        get() = sp.getBoolean("proxy_use_chain", false)
+        set(v) = sp.edit().putBoolean("proxy_use_chain", v).apply()
+
+    /** Правила маршрутизации (JSON, см. RouteRules) и действие для трафика, не подошедшего ни под одно правило. */
+    var proxyRules: String
+        get() = sp.getString("proxy_rules", "[]") ?: "[]"
+        set(v) = sp.edit().putString("proxy_rules", v).apply()
+
+    var proxyDefaultDirect: Boolean
+        get() = sp.getBoolean("proxy_default_direct", false)
+        set(v) = sp.edit().putBoolean("proxy_default_direct", v).apply()
+
     fun reset() {
         val keep = sp.getString("tabs", "")
         val links = proxyLinks
-        sp.edit().clear().putString("tabs", keep).putString("proxy_links", links).apply()
+        val chain = proxyChain
+        val rules = proxyRules
+        sp.edit().clear().putString("tabs", keep).putString("proxy_links", links)
+            .putString("proxy_chain", chain).putString("proxy_rules", rules).apply()
     }
 }
